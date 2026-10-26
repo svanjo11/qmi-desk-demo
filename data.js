@@ -241,13 +241,43 @@ const DEMO_JOBS_RAW = [
   },
 ];
 
+// ---------- SECTION 6B: CONTACTS ----------
+// Demo Contacts per Account (live: CRM Contacts where Account_Name = the Account).
+// Repair / order contact -> Deal.Contact_Name. Invoice contact -> Deal.Invoice_Contact
+// (new lookup field). Every contact used for sending must have an email address.
+const DEMO_CONTACTS = {
+  'Northsea Shipping Ltd': [
+    { id: 'c1', first: 'Ola', last: 'Hansen', email: 'ola.hansen@northseashipping.example', phone: '+47 22 00 10 10', title: 'Technical Superintendent' },
+    { id: 'c2', first: 'Accounts', last: 'Payable', email: 'accounts@northseashipping.example', phone: '', title: 'Finance' },
+    { id: 'c3', first: 'Harald', last: 'Lund', email: '', phone: '+47 22 00 10 22', title: 'Chief Engineer' },
+  ],
+  'Baltic Marine Services': [
+    { id: 'c4', first: 'Jonas', last: 'Berg', email: 'jonas.berg@balticmarine.example', phone: '', title: 'Fleet Manager' },
+    { id: 'c5', first: 'Rasa', last: 'Petraite', email: 'invoices@balticmarine.example', phone: '', title: 'Accounts' },
+  ],
+  'Demo Generation Ltd': [
+    { id: 'c6', first: 'Kate', last: 'Moore', email: 'kate.moore@demogeneration.example', phone: '', title: 'Operations' },
+    { id: 'c7', first: 'Accounts', last: 'Team', email: 'accounts@demogeneration.example', phone: '', title: 'Finance' },
+  ],
+  'QMI TEST': [
+    { id: 'c8', first: 'Kathryn', last: 'Smith', email: 'kathryn.smith@qmitest.example', phone: '', title: 'Director' },
+    { id: 'c9', first: 'Test', last: 'Accounts', email: 'accounts@qmitest.example', phone: '', title: 'Finance' },
+  ],
+};
+function contactName(c) { return c ? [c.first, c.last].filter(Boolean).join(' ') : '–'; }
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // Attach a quote to every demo job that already has one, then expose DEMO_JOBS
 function prepareDemoJob(j0) {
   const country = CUSTOMER_COUNTRY[j0.customer] || '';
   const d = defaultVatFor(country);
   const j = { ...j0, country, vat: { id: d.id, source: 'country', note: d.note } };
   const q = j.docs.find((d) => d.type === 'Quote');
-  const contactEmail = j.contact.toLowerCase().replace(/[^a-z]+/g, '.') + '@' + j.customer.toLowerCase().replace(/[^a-z]+/g, '') + '.example';
+  const cs = DEMO_CONTACTS[j.customer] || [];
+  const rc = cs.find((c) => contactName(c) === j.contact) || cs[0];
+  const contactEmail = rc ? rc.email : '';
+  j.contactId = rc ? rc.id : '';
+  j.invoiceContactId = j.contactId;
   const quoteLines = j.lines.filter((l) => l.source !== 'repair');
   const inv = j.docs.find((d) => /invoice/i.test(d.type));
   const poDoc = j.docs.find((d) => /PO$/.test(d.type));

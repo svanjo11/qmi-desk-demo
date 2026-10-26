@@ -314,3 +314,11 @@ td.r, th.r { text-align: right; }
 /* ---------- SECTION 23: VAT ROW IN QUOTE / INVOICE ---------- */
 .vat-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); }
 .vat-chip u { text-underline-offset: 2px; }
+
+/* ---------- SECTION 24: CONTACT PICKER ---------- */
+.contact-picker { display: grid; gap: var(--space-2); }
+.cp-new { margin-top: var(--space-2); padding: var(--space-3); border: 1px dashed var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-2, #f7f9fb); }
+.cp-fix { display: grid; gap: var(--space-1); }
+.cp-err { color: var(--color-warn); min-height: 0; }
+.cp-err:empty { display: none; }
+.contact-picker [hidden] { display: none !important; }

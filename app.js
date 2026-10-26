@@ -151,7 +151,7 @@ function detailHeader(job) {
         <span>${esc(job.terms)}</span><span class="sep">|</span>
         <span>${esc(job.country || 'No country')}</span>
         <button class="vat-chip ${job.vat && job.vat.source === 'user' ? 'override' : ''}" type="button" id="vat-change" title="Change the VAT rate">VAT: ${esc(vatOption(job.vat ? job.vat.id : 'std20').short)}${job.vat && job.vat.source === 'user' ? ' (changed)' : ''} · <u>Change</u></button><span class="sep">|</span>
-        <span>Contact: ${esc(job.contact)}</span><span class="sep">|</span>
+        <button class="vat-chip" type="button" id="contacts-change" title="Change the contacts">Contact: ${esc(job.contact)}${job.invoiceContactId && job.invoiceContactId !== job.contactId ? ' · Invoices: ' + esc(invoiceContactName(job)) : ''} · <u>Change</u></button><span class="sep">|</span>
         <span>Client PO: ${esc(job.clientPo || '–')}</span><span class="sep">|</span>
         <span>Notified ${esc(job.notified)}</span>
       </div>
@@ -359,6 +359,8 @@ function bindDetail(job, s) {
   if (ai) ai.addEventListener('click', () => openInvoice(job));
   const sa = $('#sales-add');
   if (sa) sa.addEventListener('click', () => openAddLine(job));
+  const cc = $('#contacts-change');
+  if (cc) cc.addEventListener('click', () => openContacts(job));
   const vc = $('#vat-change');
   if (vc) vc.addEventListener('click', () => openVat(job));
   const vp = $('#view-po');
@@ -401,7 +403,7 @@ function openNewRepair() {
     <form class="m-body" id="nr-form">
       <div class="form">
         <div class="field full"><label for="nr-cust">Customer account</label><select id="nr-cust" required>${customers.map((c) => `<option ${c === 'Northsea Shipping Ltd' ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
-        <div class="field"><label for="nr-contact">Contact</label><input id="nr-contact" value="Ola Hansen"></div>
+        ${contactPickerHTML('nrc', 'Contact for this repair request')}
         <div class="field"><label for="nr-terms">Payment terms (from the Account)</label><select id="nr-terms"><option>Net 30</option><option>Net 60</option><option>Due on Receipt</option></select></div>
         <div class="field"><label for="nr-prio">Priority</label><select id="nr-prio"><option>Standard</option><option>Urgent</option><option>Critical</option></select></div>
         <div class="field"><label for="nr-po">Client PO number</label><input id="nr-po" placeholder="Optional"></div>
@@ -409,11 +411,16 @@ function openNewRepair() {
       </div>
     </form>
     <div class="m-foot"><span class="hint">Service Reference is generated for you</span><div><button class="btn btn-ghost" type="button" data-close>Cancel</button> <button class="btn btn-primary" type="button" id="nr-create">Create and add units →</button></div></div>`);
+  const nrLoad = async () => fillContactPicker('nrc', await RepairsApi.getContacts($('#nr-cust').value));
+  $('#nr-cust').addEventListener('change', nrLoad);
+  bindContactPicker('nrc'); nrLoad();
   $('#nr-create').addEventListener('click', async () => {
     const d = $('#nr-date').value ? new Date($('#nr-date').value) : new Date();
+    let contactObj;
+    try { contactObj = await resolveContactPicker('nrc', $('#nr-cust').value); } catch (e) { return; }
     markTry('newRepair');
     const job = await RepairsApi.createRepair({
-      customer: $('#nr-cust').value, contact: $('#nr-contact').value || '–', terms: $('#nr-terms').value,
+      customer: $('#nr-cust').value, contactObj, terms: $('#nr-terms').value,
       priority: $('#nr-prio').value, clientPo: $('#nr-po').value, notified: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
     });
     state.selectedId = job.id; state.filter = 'qmi';
@@ -654,7 +661,7 @@ function openInvoice(job) {
           <div><div class="qd-brand">Quality Monitoring Instruments Ltd</div><div class="code">${esc(inv.kind)}</div></div>
           <dl class="kv qd-meta"><dt>Invoice</dt><dd class="num">${esc(inv.number)}</dd><dt>Date</dt><dd>${esc(inv.date)}</dd><dt>Terms</dt><dd>${esc(job.terms)}</dd><dt>Reference</dt><dd>${esc(job.clientPo || job.ref)}</dd></dl>
         </div>
-        <div class="qd-to"><span class="code">Bill to</span><div><strong>${esc(job.customer)}</strong><br>${esc(job.contact)}</div></div>
+        <div class="qd-to"><span class="code">Bill to</span><div><strong>${esc(job.customer)}</strong><br><span id="iv-billto">${esc(invoiceContactName(job))}</span></div></div>
         <table><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>
           ${inv.lines.map((l) => `<tr><td>${esc(l.name)}${l.serial ? `<div class="code">Serial Number: ${esc(l.serial)}</div>` : ''}</td><td class="r num">${l.qty}</td><td class="r num">${money(l.price)}</td><td class="r num">${money(l.qty * l.price)}</td></tr>`).join('')}
           <tr><td colspan="3" class="r">Subtotal</td><td class="r num">${money(inv.subtotal)}</td></tr>
@@ -666,10 +673,10 @@ function openInvoice(job) {
       </div>
       <h3 class="send-h">Email to customer</h3>
       <div class="form">
-        <div class="field"><label for="iv-to">To</label><input id="iv-to" type="email" value="${esc(job.email)}"></div>
+        ${contactPickerHTML('ivc', 'Send the invoice to (invoice contact)')}
         <div class="field"><label for="iv-cc">CC</label><input id="iv-cc" type="email" placeholder="Optional"></div>
         <div class="field full"><label for="iv-sub">Subject</label><input id="iv-sub" value="${esc(inv.kind)} ${esc(inv.number)} for your repair ${esc(job.ref)}"></div>
-        <div class="field full"><label for="iv-body">Message</label><textarea id="iv-body" rows="5">Dear ${esc(job.contact.split(' ')[0])},
+        <div class="field full"><label for="iv-body">Message</label><textarea id="iv-body" rows="5">Dear ${esc(invoiceContactFirst(job))},
 
 Please find attached ${esc(inv.kind.toLowerCase())} ${esc(inv.number)} for repair ${esc(job.ref)}.
 
@@ -681,9 +688,13 @@ QMI</textarea></div>
   const ivv = $('#iv-vat');
   if (ivv) ivv.addEventListener('click', () => openVat(job, () => openInvoice(job)));
   $('#iv-pdf').addEventListener('click', () => toast(IS_DEMO ? 'In CRM this downloads the Books invoice PDF' : 'Downloading PDF'));
+  RepairsApi.getContacts(job.customer).then((cs) => fillContactPicker('ivc', cs, job.invoiceContactId || job.contactId));
+  bindContactPicker('ivc', (c) => { const bt = $('#iv-billto'); if (bt) bt.textContent = c ? contactName(c) : 'New contact'; const b = $('#iv-body'); if (c && b) b.value = b.value.replace(/^Dear [^,\n]*,/, 'Dear ' + (c.first || contactName(c)) + ','); });
   $('#iv-send').addEventListener('click', async () => {
-    const to = $('#iv-to').value.trim();
-    if (!to || !to.includes('@')) { toast('Enter the customer email address'); return; }
+    let ic;
+    try { ic = await resolveContactPicker('ivc', job.customer); } catch (e) { return; }
+    await RepairsApi.setContacts(job, null, ic);
+    const to = ic.email;
     await RepairsApi.sendInvoice(job, { to, cc: $('#iv-cc').value.trim(), subject: $('#iv-sub').value, body: $('#iv-body').value });
     markTry('invoice');
     console.log(LOG_PREFIX + 'Invoice ' + inv.number + ' emailed to ' + to);
@@ -768,13 +779,18 @@ function openNewSales() {
       <div class="field"><label for="ns-type">Deal type</label><select id="ns-type"><option>Spares</option><option>New System</option></select></div>
       <div class="field"><label for="ns-name">Deal name</label><input id="ns-name" value="Spares enquiry"></div>
       <div class="field full"><label for="ns-cust">Customer account</label><select id="ns-cust">${customers.map((c) => `<option>${esc(c)}</option>`).join('')}</select></div>
-      <div class="field"><label for="ns-contact">Contact</label><input id="ns-contact" value="Ola Hansen"></div>
+      ${contactPickerHTML('nsc', 'Contact for this order')}
       <div class="field"><label for="ns-terms">Payment terms (from the Account)</label><select id="ns-terms"><option>Net 30</option><option>Net 60</option><option>Due on Receipt</option></select></div>
     </div></div>
     <div class="m-foot"><span class="hint">Kari orders stay on the Deal page – they never go to the portal</span><div><button class="btn btn-ghost" type="button" data-close>Cancel</button> <button class="btn btn-primary" type="button" id="ns-create">Create and add products →</button></div></div>`);
+  const nsLoad = async () => fillContactPicker('nsc', await RepairsApi.getContacts($('#ns-cust').value));
+  $('#ns-cust').addEventListener('change', nsLoad);
+  bindContactPicker('nsc'); nsLoad();
   $('#ns-create').addEventListener('click', async () => {
+    let contactObj;
+    try { contactObj = await resolveContactPicker('nsc', $('#ns-cust').value); } catch (e) { return; }
     markTry('newSales');
-    const job = await RepairsApi.createSales({ dealType: $('#ns-type').value, dealName: $('#ns-name').value || 'Sales order', customer: $('#ns-cust').value, contact: $('#ns-contact').value || '–', terms: $('#ns-terms').value });
+    const job = await RepairsApi.createSales({ dealType: $('#ns-type').value, dealName: $('#ns-name').value || 'Sales order', customer: $('#ns-cust').value, contactObj, terms: $('#ns-terms').value });
     state.selectedId = job.id; state.filter = 'qmi'; render();
     openAddSalesLine(job);
   });
@@ -813,6 +829,105 @@ function openTryIt() {
   document.querySelectorAll('[data-start]').forEach((b) => b.addEventListener('click', () => {
     const t = TRY_TASKS.find((x) => x.id === b.dataset.start); closeModal(); t.start();
   }));
+}
+
+// ---------- SECTION 8I: CONTACT PICKER ----------
+// One reusable control: pick an Account contact, or "+ Add new contact".
+// New contacts must have a last name and an email address. Picking an
+// existing contact with no email asks for one before continuing.
+// pfx: id prefix, so several pickers can sit on one screen.
+function invoiceContact(job) { return ((RepairsApi.contacts || {})[job.customer] || []).find((c) => c.id === (job.invoiceContactId || job.contactId)); }
+function invoiceContactName(job) { return contactName(invoiceContact(job)); }
+function invoiceContactFirst(job) { const c = invoiceContact(job); return c ? (c.first || contactName(c)) : job.contact.split(' ')[0]; }
+
+function contactPickerHTML(pfx, label) {
+  return `<div class="field full contact-picker" id="${pfx}">
+    <label for="${pfx}-sel">${esc(label)} *</label>
+    <select id="${pfx}-sel"><option value="">Loading contacts…</option></select>
+    <div class="form cp-new" id="${pfx}-new" hidden>
+      <div class="field"><label for="${pfx}-first">First name</label><input id="${pfx}-first" autocomplete="off"></div>
+      <div class="field"><label for="${pfx}-last">Last name *</label><input id="${pfx}-last" autocomplete="off"></div>
+      <div class="field"><label for="${pfx}-email">Email *</label><input id="${pfx}-email" type="email" autocomplete="off" placeholder="name@company.com"></div>
+      <div class="field"><label for="${pfx}-phone">Phone</label><input id="${pfx}-phone" type="tel" placeholder="Optional"></div>
+      <div class="field full"><label for="${pfx}-title">Job title</label><input id="${pfx}-title" placeholder="Optional"></div>
+    </div>
+    <div class="cp-fix" id="${pfx}-fix" hidden><label for="${pfx}-fixemail">This contact has no email address. Add one to continue *</label><input id="${pfx}-fixemail" type="email" placeholder="name@company.com"></div>
+    <div class="code" id="${pfx}-info"></div>
+    <p class="code cp-err" id="${pfx}-err" role="alert"></p>
+  </div>`;
+}
+function fillContactPicker(pfx, contacts, selectedId) {
+  const sel = $('#' + pfx + '-sel');
+  if (!sel) return;
+  sel._contacts = contacts;
+  sel.innerHTML = contacts.map((c) => `<option value="${esc(c.id)}" ${c.id === selectedId ? 'selected' : ''}>${esc(contactName(c))} – ${c.email ? esc(c.email) : 'no email'}${c.title ? ' (' + esc(c.title) + ')' : ''}</option>`).join('')
+    + '<option value="__new">+ Add new contact…</option>';
+  if (!contacts.length) sel.value = '__new';
+  sel.dispatchEvent(new Event('change'));
+}
+function bindContactPicker(pfx, onChange) {
+  const sel = $('#' + pfx + '-sel');
+  sel.addEventListener('change', () => {
+    const isNew = sel.value === '__new';
+    const c = (sel._contacts || []).find((x) => x.id === sel.value);
+    $('#' + pfx + '-new').hidden = !isNew;
+    $('#' + pfx + '-fix').hidden = !(c && !c.email);
+    $('#' + pfx + '-err').textContent = '';
+    $('#' + pfx + '-info').textContent = c && c.email ? 'Email: ' + c.email + (c.phone ? ' · ' + c.phone : '') : '';
+    if (onChange) onChange(c);
+  });
+  ['-first', '-last', '-email', '-fixemail'].forEach((k) => { const el = $('#' + pfx + k); if (el) el.addEventListener('input', () => { $('#' + pfx + '-err').textContent = ''; }); });
+}
+// resolveContactPicker: returns the chosen contact (creating it or adding its
+// email first). Shows the problem under the picker and throws if incomplete.
+async function resolveContactPicker(pfx, customer) {
+  const sel = $('#' + pfx + '-sel');
+  const err = $('#' + pfx + '-err');
+  const fail = (msg, focusId) => { err.textContent = msg; if (focusId) $('#' + pfx + focusId).focus(); throw new Error(msg); };
+  if (sel.value === '__new') {
+    const c = { first: $('#' + pfx + '-first').value.trim(), last: $('#' + pfx + '-last').value.trim(), email: $('#' + pfx + '-email').value.trim(), phone: $('#' + pfx + '-phone').value.trim(), title: $('#' + pfx + '-title').value.trim() };
+    if (!c.last) fail('Enter the contact\'s last name.', '-last');
+    if (!c.email) fail('An email address is required for new contacts.', '-email');
+    if (!EMAIL_RE.test(c.email)) fail('That email address doesn\'t look right.', '-email');
+    try {
+      const rec = await RepairsApi.createContact(customer, c);
+      console.log(LOG_PREFIX + 'Contact created ' + c.email + ' on ' + customer);
+      toast('Contact ' + contactName(rec) + ' added to ' + customer);
+      return rec;
+    } catch (e) { fail(e.message, '-email'); }
+  }
+  const c = (sel._contacts || []).find((x) => x.id === sel.value);
+  if (!c) fail('Pick a contact.');
+  if (!c.email) {
+    const em = $('#' + pfx + '-fixemail').value.trim();
+    if (!em) fail(contactName(c) + ' has no email address. Add one to continue.', '-fixemail');
+    if (!EMAIL_RE.test(em)) fail('That email address doesn\'t look right.', '-fixemail');
+    await RepairsApi.updateContactEmail(customer, c.id, em);
+    console.log(LOG_PREFIX + 'Email added to contact ' + contactName(c));
+  }
+  return c;
+}
+
+// ---------- SECTION 8J: CHANGE CONTACTS (header button) ----------
+function openContacts(job) {
+  openModal(`
+    <div class="m-head"><h2 id="modal-title">Contacts · ${esc(job.ref)}</h2><p>Who the ${job.process === 'sales' ? 'order' : 'repair request'} is for, and who receives the invoice. Both need an email address.</p></div>
+    <div class="m-body"><div class="form">
+      ${contactPickerHTML('rqc', job.process === 'sales' ? 'Order contact' : 'Repair request contact')}
+      ${contactPickerHTML('icc', 'Invoice contact')}
+    </div></div>
+    <div class="m-foot"><span class="hint">${esc(job.customer)}</span><div><button class="btn btn-ghost" type="button" data-close>Cancel</button> <button class="btn btn-primary" type="button" id="ct-save">Save contacts</button></div></div>`);
+  bindContactPicker('rqc'); bindContactPicker('icc');
+  RepairsApi.getContacts(job.customer).then((cs) => { fillContactPicker('rqc', cs, job.contactId); fillContactPicker('icc', cs, job.invoiceContactId || job.contactId); });
+  $('#ct-save').addEventListener('click', async () => {
+    let rc, ic;
+    try { rc = await resolveContactPicker('rqc', job.customer); } catch (e) { return; }
+    // refresh the invoice picker list in case a new contact was just created
+    if ($('#icc-sel').value !== '__new') fillContactPicker('icc', await RepairsApi.getContacts(job.customer), $('#icc-sel').value);
+    try { ic = await resolveContactPicker('icc', job.customer); } catch (e) { return; }
+    await RepairsApi.setContacts(job, rc, ic);
+    closeModal(); toast('Contacts saved'); render();
+  });
 }
 
 // ---------- SECTION 9: MODAL + TOAST HELPERS ----------

@@ -56,10 +56,10 @@ const MockAdapter = {
   async createRepair(form) {
     const next = 25 + this.jobs.filter((j) => j.id.startsWith('n')).length;
     const job = {
-      id: 'n' + next, process: 'repair', ref: 'SVC-2026-00' + next, customer: form.customer, contact: form.contact,
+      id: 'n' + next, process: 'repair', ref: 'SVC-2026-00' + next, customer: form.customer, contact: contactName(form.contactObj),
       terms: form.terms, priority: form.priority, notified: form.notified, stage: 'Repair Request Received',
       clientPo: form.clientPo, units: [], lines: [], docs: [], sync: {}, quote: null,
-      email: (form.contact || 'contact').toLowerCase().replace(/[^a-z]+/g, '.') + '@' + form.customer.toLowerCase().replace(/[^a-z]+/g, '') + '.example',
+      email: form.contactObj.email, contactId: form.contactObj.id, invoiceContactId: form.contactObj.id,
       log: [{ when: nowText(), text: 'Repairs Deal created in Repairs Desk' }],
       country: CUSTOMER_COUNTRY[form.customer] || '', vat: (() => { const d = defaultVatFor(CUSTOMER_COUNTRY[form.customer]); return { id: d.id, source: 'country', note: d.note }; })(),
     };
@@ -67,14 +67,45 @@ const MockAdapter = {
     return job;
   },
 
+  // ---------- Contacts ----------
+  contacts: JSON.parse(JSON.stringify(DEMO_CONTACTS)),
+  async getContacts(customer) { if (!this.contacts[customer]) this.contacts[customer] = []; return this.contacts[customer]; },
+  // createContact: new Contact on the Account. Last name and email are required.
+  async createContact(customer, c) {
+    if (!c.last) throw new Error('Enter the contact\'s last name.');
+    if (!c.email || !EMAIL_RE.test(c.email)) throw new Error('Enter a valid email address for the new contact.');
+    const list = await this.getContacts(customer);
+    if (list.some((x) => (x.email || '').toLowerCase() === c.email.toLowerCase())) throw new Error('A contact with ' + c.email + ' already exists on this Account – pick them from the list.');
+    const rec = { id: 'nc' + Date.now(), first: c.first, last: c.last, email: c.email, phone: c.phone || '', title: c.title || '', isNew: true };
+    list.push(rec);
+    return rec;
+  },
+  // updateContactEmail: add a missing email address to an existing contact
+  async updateContactEmail(customer, id, email) {
+    if (!EMAIL_RE.test(email)) throw new Error('Enter a valid email address.');
+    const c = (await this.getContacts(customer)).find((x) => x.id === id);
+    c.email = email;
+    return c;
+  },
+  // setContacts: repair/order contact + invoice contact on the Deal
+  async setContacts(job, requestContact, invoiceContact) {
+    const changes = [];
+    if (requestContact && requestContact.id !== job.contactId) changes.push('contact → ' + contactName(requestContact));
+    if (invoiceContact && invoiceContact.id !== job.invoiceContactId) changes.push('invoice contact → ' + contactName(invoiceContact));
+    if (requestContact) { job.contactId = requestContact.id; job.contact = contactName(requestContact); job.email = requestContact.email; }
+    if (invoiceContact) job.invoiceContactId = invoiceContact.id;
+    if (changes.length) job.log.push({ when: nowText(), text: 'Contacts updated: ' + changes.join(', ') });
+    return job;
+  },
+
   // createSales: new Spares / New System Deal at Enquiry Received
   // (live: insertRecord Deals with Type and the Standard layout)
   async createSales(form) {
     const job = {
-      id: 'ns' + Date.now(), process: 'sales', dealType: form.dealType, ref: form.dealName, customer: form.customer, contact: form.contact,
+      id: 'ns' + Date.now(), process: 'sales', dealType: form.dealType, ref: form.dealName, customer: form.customer, contact: contactName(form.contactObj),
       terms: form.terms, priority: 'Standard', notified: nowText().slice(0, 6) + ' 2026', stage: 'Enquiry Received', clientPo: '',
       units: [], lines: [], docs: [], sync: {}, packages: [], quote: null, invoice: null,
-      email: (form.contact || 'contact').toLowerCase().replace(/[^a-z]+/g, '.') + '@' + form.customer.toLowerCase().replace(/[^a-z]+/g, '') + '.example',
+      email: form.contactObj.email, contactId: form.contactObj.id, invoiceContactId: form.contactObj.id,
       log: [{ when: nowText(), text: form.dealType + ' Deal created in QMI Desk' }],
       country: CUSTOMER_COUNTRY[form.customer] || '', vat: (() => { const d = defaultVatFor(CUSTOMER_COUNTRY[form.customer]); return { id: d.id, source: 'country', note: d.note }; })(),
     };
