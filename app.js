@@ -132,6 +132,7 @@ function renderDetail() {
     <div class="grid">
       ${linesCard(job)}
       ${quoteCard(job)}
+      ${poCard(job)}
       ${invoiceCard(job)}
       ${job.process === 'sales' ? packagesCard(job) : unitsCard(job)}
       ${docsCard(job)}
@@ -279,6 +280,25 @@ function quoteCard(job) {
   </div>${warn}</section>`;
 }
 
+// ---------- Cambertronics PO card ----------
+function poCard(job) {
+  const label = job.process === 'sales' ? 'Pack-charge PO' : 'Cambertronics PO';
+  if (!job.po) {
+    // Repairs: say when it will appear; Sales: only once the order is placed
+    if (job.process === 'sales' && ['enquiry', 'quote'].includes(stageOf(job).phase)) return '';
+    if (job.process === 'repair' && !job.lines.length) return '';
+    const when = job.process === 'sales' ? 'Created when the order is confirmed (PO Received, or payment for pre-pay).' : 'Issued at "Issue Cambertronics PO" once Cambertronics have booked in the goods.';
+    return `<section class="card span-2 quote-strip"><div class="card-body qs"><div><h3>${label}</h3><p class="code">Not issued yet. ${when}</p></div></div></section>`;
+  }
+  const po = job.po;
+  return `<section class="card span-2 quote-strip"><div class="card-body qs">
+    <div><h3>${label} ${esc(po.number)}</h3><p class="code">To ${esc(po.vendor)} · ${po.lines.length} line${po.lines.length === 1 ? '' : 's'}${po.issuedOn && po.issuedOn !== '—' ? ' · issued ' + esc(po.issuedOn) : ''}</p></div>
+    <div class="qs-total num">${money(po.total)} <span class="code">inc VAT</span></div>
+    <span class="pill cam">${esc(po.status)}</span>
+    <button class="btn btn-ghost" type="button" id="view-po">View PO</button>
+  </div></section>`;
+}
+
 // ---------- Invoice card ----------
 function invoiceCard(job) {
   if (!job.invoice) return '';
@@ -334,6 +354,8 @@ function bindDetail(job, s) {
   if (ai) ai.addEventListener('click', () => openInvoice(job));
   const sa = $('#sales-add');
   if (sa) sa.addEventListener('click', () => openAddLine(job));
+  const vp = $('#view-po');
+  if (vp) vp.addEventListener('click', () => openPO(job));
   const vi = $('#view-invoice');
   if (vi) vi.addEventListener('click', () => openInvoice(job));
   const rq = $('#refresh-quote');
@@ -533,6 +555,37 @@ QMI</textarea></div>
     console.log(LOG_PREFIX + 'Quote ' + q.number + ' sent to ' + to);
     closeModal(); toast('Quote ' + q.number + ' sent to ' + to); render();
   });
+}
+
+// ---------- SECTION 8C2: CAMBERTRONICS PO – VIEW ----------
+// Read-only: the PO is issued by the CRM step and is already on the portal
+// Job for Cambertronics, so there is nothing to send from here.
+function openPO(job) {
+  const po = job.po;
+  if (!po) { toast('No PO yet'); return; }
+  const note = job.process === 'sales'
+    ? 'One line: the pack charge for picking and packing this order.'
+    : 'One labour line per unit at the Cambertronics purchase price, plus the pack charge. Parts come from QMI stock, so they are not on the PO.';
+  openModal(`
+    <div class="m-head"><h2 id="modal-title">Purchase Order ${esc(po.number)} · ${esc(job.ref)}</h2><p>${esc(note)}</p></div>
+    <div class="m-body">
+      <div class="quote-doc">
+        <div class="qd-top">
+          <div><div class="qd-brand">Quality Monitoring Instruments Ltd</div><div class="code">Purchase order</div></div>
+          <dl class="kv qd-meta"><dt>PO</dt><dd class="num">${esc(po.number)}</dd><dt>Status</dt><dd>${esc(po.status)}</dd><dt>Reference</dt><dd>${esc(job.clientPo || job.ref)}</dd><dt>For</dt><dd>${esc(job.ref)}</dd></dl>
+        </div>
+        <div class="qd-to"><span class="code">Vendor</span><div><strong>${esc(po.vendor)}</strong><br>Repairs and packing partner</div></div>
+        <table><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>
+          ${po.lines.map((l) => `<tr><td>${esc(l.name)}${l.serial ? `<div class="code">Serial Number: ${esc(l.serial)}</div>` : ''}${l.note ? `<div class="code">${esc(l.note)}</div>` : ''}</td><td class="r num">${l.qty}</td><td class="r num">${money(l.price)}</td><td class="r num">${money(l.qty * l.price)}</td></tr>`).join('')}
+          <tr><td colspan="3" class="r">Subtotal</td><td class="r num">${money(po.subtotal)}</td></tr>
+          <tr><td colspan="3" class="r">VAT 20%</td><td class="r num">${money(po.vat)}</td></tr>
+          <tr class="totals"><td colspan="3" class="r">Total</td><td class="r num">${money(po.total)}</td></tr>
+        </tbody></table>
+      </div>
+      <p class="code" style="margin-top:var(--space-3)">Cambertronics see this PO on the portal Job${job.process === 'repair' ? ' and start work once it is there' : ''}.</p>
+    </div>
+    <div class="m-foot"><button class="btn btn-ghost" type="button" id="po-pdf">Download PDF</button><button class="btn btn-primary" type="button" data-close>Close</button></div>`);
+  $('#po-pdf').addEventListener('click', () => toast(IS_DEMO ? 'In CRM this downloads the Books PO PDF' : 'Downloading PDF'));
 }
 
 // ---------- SECTION 8D: INVOICE – VIEW AND EMAIL ----------

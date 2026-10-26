@@ -109,7 +109,13 @@ const MockAdapter = {
       job.quote = makeQuote(ref, job.lines, 'Draft');
     }
     if (current.stage === 'Quote Sent') { job.sync.job = 'Success'; job.units.forEach((x) => (x.portal = 'Awaiting goods')); }
-    if (current.stage === 'Goods Received / GRN Issued') { job.docs.push({ type: 'Cambertronics PO', ref: 'PO-00' + (230 + this.jobs.indexOf(job)) }); job.sync.po = 'Issued'; job.units.forEach((x) => (x.portal = 'Released for repair')); }
+    if (current.stage === 'Goods Received / GRN Issued') {
+      const ref = 'PO-00' + (230 + this.jobs.indexOf(job));
+      job.docs.push({ type: 'Cambertronics PO', ref });
+      job.po = makePO(ref, job, 'Issued', nowText());
+      job.log.push({ when: nowText(), text: 'Cambertronics PO ' + ref + ' issued (' + job.po.lines.length + ' lines) and added to the portal Job' });
+      job.sync.po = 'Issued'; job.units.forEach((x) => (x.portal = 'Released for repair'));
+    }
     if (current.stage === 'Package Ready' && !job.invoice) {
       const ref = 'INV-0001' + (40 + this.jobs.indexOf(job));
       job.docs.push({ type: 'Invoice', ref });
@@ -126,6 +132,7 @@ const MockAdapter = {
     const n = 40 + this.jobs.indexOf(job);
     const release = (why) => {
       job.docs.push({ type: 'Sales Order', ref: 'SO-002' + n }, { type: 'Pack-charge PO', ref: 'PO-002' + n }, { type: 'Package slip', ref: 'PKG-SO-002' + n });
+      job.po = makePO('PO-002' + n, job, 'Issued', nowText());
       job.sync.job = 'Success'; job.sync.po = 'Issued';
       job.log.push({ when: nowText(), text: why + ' – SO-002' + n + ' and pack-charge PO-002' + n + ' created' });
       job.log.push({ when: nowText(), text: 'Order Confirmed – portal Pack Only Job created, Deal moved to Picklist Sent' });

@@ -50,10 +50,13 @@ const STAGES = [
 // Unit product code -> repair line created by Repair Details.
 // salePrice: customer price (Books rate). Pack line is added once per Deal.
 const REPAIR_LINE_RULES = {
-  Q10: { code: 'Q1001', name: 'Atmospheric Sensor Repair', salePrice: 330 },
-  Q02: { code: 'Q0201', name: 'Engine Detector Repair', salePrice: 225 },
+  Q10: { code: 'Q1001', name: 'Atmospheric Sensor Repair', salePrice: 330, purchasePrice: 75 },
+  Q02: { code: 'Q0201', name: 'Engine Detector Repair', salePrice: 225, purchasePrice: 75 },
 };
-const PACK_LINE = { code: 'PO', name: 'Pack Only - Repairs', salePrice: 40 };
+const PACK_LINE = { code: 'PO', name: 'Pack Only - Repairs', salePrice: 40, purchasePrice: 25 };
+// Pack charge on Sales (Spares / New System) POs – Books "Pack Only - Packaging"
+const SALES_PACK_LINE = { code: 'PKO', name: 'Pack Only - Packaging', purchasePrice: 22 };
+const VENDOR = 'Cambertronics Ltd';
 
 // Extra items a user may add by hand AFTER Repair Details has created the
 // repair lines (demo catalogue; live = CRM Products lookup).
@@ -100,6 +103,28 @@ function makeQuote(number, lines, status, sentOn) {
 // Invoice (Zoho Books Invoice) – built from ALL line items, including the
 // parts Cambertronics added at Repair Complete.
 // live: GET books/v3/invoices/{Invoice_ID}
+// Cambertronics Purchase Order (Zoho Books PO). Rules = fn_process_repair_po
+// and the Sales pack-charge PO (process_order_v2_credit_docs):
+//   Repairs: one LABOUR line per unit at the purchase price + Pack Only - Repairs.
+//            Parts are never on the PO (QMI stock).
+//   Sales  : one line, Pack Only - Packaging (pack charge).
+// live: GET books/v3/purchaseorders?purchaseorder_number=...
+function makePO(number, job, status, issuedOn) {
+  let lines;
+  if (job.process === 'sales') {
+    lines = [{ code: SALES_PACK_LINE.code, name: SALES_PACK_LINE.name, serial: '', qty: 1, price: SALES_PACK_LINE.purchasePrice, note: 'Pick and pack ' + job.ref }];
+  } else {
+    const labourCodes = Object.values(REPAIR_LINE_RULES).map((r) => r.code);
+    lines = job.lines.filter((l) => labourCodes.includes(l.code) && l.source !== 'repair').map((l) => {
+      const rule = Object.values(REPAIR_LINE_RULES).find((r) => r.code === l.code);
+      return { code: l.code, name: l.name + ' – labour', serial: l.serial, qty: l.qty, price: rule.purchasePrice };
+    });
+    lines.push({ code: PACK_LINE.code, name: PACK_LINE.name, serial: '', qty: 1, price: PACK_LINE.purchasePrice, note: 'Units (' + job.units.length + '): ' + job.units.map((x) => x.serial).join(', ') });
+  }
+  const subtotal = lines.reduce((t, l) => t + l.qty * l.price, 0);
+  return { number, status: status || 'Issued', issuedOn: issuedOn || '', vendor: VENDOR, lines, subtotal, vat: subtotal * VAT_RATE, total: subtotal * (1 + VAT_RATE) };
+}
+
 function makeInvoice(number, lines, status, kind, sentOn) {
   const doc = makeQuote(number, lines, status, sentOn);
   doc.kind = kind || 'Invoice';
@@ -192,9 +217,11 @@ function prepareDemoJob(j) {
   const contactEmail = j.contact.toLowerCase().replace(/[^a-z]+/g, '.') + '@' + j.customer.toLowerCase().replace(/[^a-z]+/g, '') + '.example';
   const quoteLines = j.lines.filter((l) => l.source !== 'repair');
   const inv = j.docs.find((d) => /invoice/i.test(d.type));
+  const poDoc = j.docs.find((d) => /PO$/.test(d.type));
   return {
     ...j, email: contactEmail,
     quote: q ? makeQuote(q.ref, quoteLines, 'Sent', q.ref === 'QT-000214' ? '22 Oct 2026' : '—') : null,
+    po: poDoc ? makePO(poDoc.ref, j, 'Issued', '—') : null,
     invoice: inv ? makeInvoice(inv.ref, j.lines, j.draftInvoice ? 'Draft' : 'Sent', inv.type === 'Pre-payment invoice' ? 'Pre-payment invoice' : 'Invoice', '23 Oct 2026') : null,
   };
 }
