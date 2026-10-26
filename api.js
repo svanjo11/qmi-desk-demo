@@ -30,7 +30,27 @@ const MockAdapter = {
   async listJobs() { return this.jobs; },
 
   // getAssets: the customer's Asset Register (live: Assets_Register by Account)
-  async getAssets(customer) { return DEMO_ASSETS[customer] || []; },
+  // assets: per-customer Asset Register copies, so new assets persist in the demo session
+  assets: JSON.parse(JSON.stringify(DEMO_ASSETS)),
+  async getAssets(customer) {
+    if (!this.assets[customer]) {
+      this.assets[customer] = [
+        { serial: 'DEMO-01', model: 'Q10 Atmospheric Sensor', productCode: 'Q10', vessel: 'Demo vessel', imo: '' },
+        { serial: 'DEMO-02', model: 'Q02 Engine Detector', productCode: 'Q02', vessel: 'Demo vessel', imo: '' },
+      ];
+    }
+    return this.assets[customer];
+  },
+
+  // createAsset: add a unit to the customer's Asset Register
+  // (live: insertRecord Assets_Register – see ZohoAdapter.createAsset)
+  async createAsset(job, a) {
+    const list = await this.getAssets(job.customer);
+    if (list.some((x) => x.serial.toLowerCase() === a.serial.toLowerCase())) throw new Error('Serial number ' + a.serial + ' is already on this customer\'s Asset Register.');
+    list.push({ serial: a.serial, model: a.model, productCode: a.productCode, vessel: a.vessel, imo: a.imo, isNew: true });
+    job.log.push({ when: nowText(), text: 'New asset ' + a.serial + ' (' + a.productCode + ') added to the Asset Register' });
+    return list[list.length - 1];
+  },
 
   // createRepair: new Repairs V1 Deal (live: ZOHO.CRM.API.insertRecord Deals)
   async createRepair(form) {

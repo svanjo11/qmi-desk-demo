@@ -397,27 +397,67 @@ function openNewRepair() {
 // Step A: tick the units from the customer's Asset Register.
 // Step B: fault + additional work per unit, with a live preview of the
 //         line items that will be created.
-async function openRepairDetails(job) {
-  const assets = await RepairsApi.getAssets(job.customer);
-  const list = assets.length ? assets : [
-    { serial: 'DEMO-01', model: 'Q10 Atmospheric Sensor', productCode: 'Q10', vessel: 'Demo vessel', imo: '–' },
-    { serial: 'DEMO-02', model: 'Q02 Engine Detector', productCode: 'Q02', vessel: 'Demo vessel', imo: '–' },
-  ];
+async function openRepairDetails(job, preselect) {
+  // preselect: serials to keep ticked (after Back, or after adding a new asset)
+  const keep = new Set(preselect || []);
+  const list = await RepairsApi.getAssets(job.customer);
   openModal(`
     <div class="m-head"><h2 id="modal-title">Repair Details · ${esc(job.ref)}</h2><p>Tick the units the customer is returning. The line items are created from your selection.</p>
       <div class="m-steps"><span>1 Customer</span><span class="on">2 Units</span><span>3 Faults</span></div></div>
     <div class="m-body">
-      <div class="assets">${list.map((a, i) => `<label class="asset"><input type="checkbox" value="${i}">
-        <div><div class="s num">${esc(a.serial)}</div><div class="m">${esc(a.model)} · ${esc(a.vessel)} (IMO ${esc(a.imo)})</div></div>
-        <span class="code">${esc(a.productCode)}</span></label>`).join('')}</div>
-      <p class="code" style="margin-top:var(--space-3)">Unit not listed? Add it to the Asset Register first.</p>
+      ${list.length ? `<div class="assets">${list.map((a, i) => `<label class="asset"><input type="checkbox" value="${i}" ${keep.has(a.serial) ? 'checked' : ''}>
+        <div><div class="s num">${esc(a.serial)}${a.isNew ? ' <span class="src manual">New</span>' : ''}</div><div class="m">${esc(a.model)} · ${esc(a.vessel || 'No vessel')}${a.imo ? ' (IMO ' + esc(a.imo) + ')' : ''}</div></div>
+        <span class="code">${esc(a.productCode)}</span></label>`).join('')}</div>`
+        : '<div class="empty"><strong>No units on the Asset Register for this customer yet</strong>Add the first one below.</div>'}
+      <div class="add-asset-row"><span class="code">Unit not listed?</span><button class="btn btn-ghost btn-sm" type="button" id="rd-new-asset">+ Add new asset</button></div>
     </div>
     <div class="m-foot"><span class="hint" id="rd-count">0 units selected</span><div><button class="btn btn-ghost" type="button" data-close>Cancel</button> <button class="btn btn-primary" type="button" id="rd-next" disabled>Next: faults →</button></div></div>`);
   const boxes = () => Array.from(document.querySelectorAll('.asset input:checked')).map((b) => list[Number(b.value)]);
-  document.querySelectorAll('.asset input').forEach((b) => b.addEventListener('change', () => {
-    const n = boxes().length; $('#rd-count').textContent = n + ' unit' + (n === 1 ? '' : 's') + ' selected'; $('#rd-next').disabled = n === 0;
-  }));
+  const refresh = () => { const n = boxes().length; $('#rd-count').textContent = n + ' unit' + (n === 1 ? '' : 's') + ' selected'; $('#rd-next').disabled = n === 0; };
+  document.querySelectorAll('.asset input').forEach((b) => b.addEventListener('change', refresh));
+  refresh();
+  $('#rd-new-asset').addEventListener('click', () => openNewAsset(job, boxes().map((x) => x.serial)));
   $('#rd-next').addEventListener('click', () => repairDetailsFaults(job, boxes()));
+}
+
+// ---------- SECTION 8A: ADD NEW ASSET (from Repair Details) ----------
+// Creates the unit on the customer's Asset Register (Assets_Register),
+// then returns to Repair Details with the new unit already ticked.
+// Fields map to CRM: Name (Serial Number, required), Account, Product /
+// Product_Code, Vessel_Name, IMO_Number, Date_Sold, Primary_Contact,
+// Description; Asset_Status is set to "Sold/In Service".
+function openNewAsset(job, keepSerials) {
+  openModal(`
+    <div class="m-head"><h2 id="modal-title">Add new asset · ${esc(job.customer)}</h2><p>Adds the unit to the customer's Asset Register. You go straight back to Repair Details with it ticked.</p>
+      <div class="m-steps"><span>1 Customer</span><span class="on">2 Units</span><span>3 Faults</span></div></div>
+    <div class="m-body"><div class="form">
+      <div class="field"><label for="na-serial">Serial number *</label><input id="na-serial" autocomplete="off" placeholder="e.g. A5101"></div>
+      <div class="field"><label for="na-prod">Product *</label><select id="na-prod">${Object.keys(REPAIR_LINE_RULES).map((k) => `<option value="${k}">${k === 'Q10' ? 'Q10 Atmospheric Sensor' : 'Q02 Engine Detector'} (${k})</option>`).join('')}</select></div>
+      <div class="field"><label for="na-vessel">Vessel name</label><input id="na-vessel" placeholder="Optional"></div>
+      <div class="field"><label for="na-imo">IMO number</label><input id="na-imo" inputmode="numeric" placeholder="7 digits, optional"></div>
+      <div class="field"><label for="na-sold">Date sold</label><input id="na-sold" type="date"></div>
+      <div class="field"><label for="na-contact">Primary contact</label><input id="na-contact" value="${esc(job.contact)}"></div>
+      <div class="field full"><label for="na-notes">Notes</label><textarea id="na-notes" placeholder="Optional"></textarea></div>
+    </div><p class="code" id="na-error" role="alert" style="color:var(--color-warn);margin-top:var(--space-3)"></p></div>
+    <div class="m-foot"><span class="hint">Account: ${esc(job.customer)} · Status: Sold/In Service</span><div><button class="btn btn-ghost" type="button" id="na-back">← Back</button> <button class="btn btn-primary" type="button" id="na-save">Save asset</button></div></div>`);
+  $('#na-back').addEventListener('click', () => openRepairDetails(job, keepSerials));
+  $('#na-save').addEventListener('click', async () => {
+    const serial = $('#na-serial').value.trim();
+    const imo = $('#na-imo').value.trim();
+    const err = $('#na-error');
+    if (!serial) { err.textContent = 'Enter the serial number.'; $('#na-serial').focus(); return; }
+    if (imo && !/^\d{7}$/.test(imo)) { err.textContent = 'IMO numbers are 7 digits.'; $('#na-imo').focus(); return; }
+    try {
+      const productCode = $('#na-prod').value;
+      await RepairsApi.createAsset(job, {
+        serial, productCode, model: productCode === 'Q10' ? 'Q10 Atmospheric Sensor' : 'Q02 Engine Detector',
+        vessel: $('#na-vessel').value.trim(), imo, dateSold: $('#na-sold').value, contact: $('#na-contact').value.trim(), notes: $('#na-notes').value.trim(),
+      });
+      console.log(LOG_PREFIX + 'Asset created ' + serial + ' for ' + job.customer);
+      toast('Asset ' + serial + ' added to the Asset Register');
+      openRepairDetails(job, keepSerials.concat(serial));
+    } catch (e) { err.textContent = e.message; }
+  });
 }
 
 function repairDetailsFaults(job, selected) {
@@ -429,12 +469,12 @@ function repairDetailsFaults(job, selected) {
       ${selected.map((a, i) => `<div class="unit-form"><h4>${esc(a.serial)} · ${esc(a.model)}</h4><div class="form">
         <div class="field"><label for="f-${i}">Fault description</label><textarea id="f-${i}" placeholder="What the customer reported">None known</textarea></div>
         <div class="field"><label for="w-${i}">Additional work</label><textarea id="w-${i}" placeholder="Optional"></textarea></div>
-        <div class="field"><label for="t-${i}">Repair type</label><select id="t-${i}"><option>Standard Repair</option><option>Survey only</option><option>Calibration</option></select></div>
+        <div class="field"><label for="t-${i}">Repair type</label><select id="t-${i}">${['Standard Repair', 'Warranty Repair', 'Inspection Only', 'Calibration Only', 'No Fault Found'].map((o) => `<option>${o}</option>`).join('')}</select></div>
       </div></div>`).join('')}
       <div class="preview-lines"><h4>These line items will be created for you</h4><ul>${lines.map((l) => `<li>${esc(l.name)}${l.serial ? ' – serial ' + esc(l.serial) : ''} · ${money(l.price)}</li>`).join('')}</ul></div>
     </div>
     <div class="m-foot"><span class="hint">Completes the Repair Details Blueprint step</span><div><button class="btn btn-ghost" type="button" id="rd-back">← Back</button> <button class="btn btn-primary" type="button" id="rd-save">Save repair details</button></div></div>`);
-  $('#rd-back').addEventListener('click', () => openRepairDetails(job));
+  $('#rd-back').addEventListener('click', () => openRepairDetails(job, selected.map((x) => x.serial)));
   $('#rd-save').addEventListener('click', async () => {
     const withFaults = selected.map((a, i) => ({ ...a, fault: $('#f-' + i).value || 'None known', additions: $('#w-' + i).value, repairType: $('#t-' + i).value }));
     await RepairsApi.runRepairDetails(job, withFaults);
@@ -637,7 +677,7 @@ function openNewSales() {
 // Demo only – hidden in the live widget.
 const TRY_TASKS = [
   { id: 'newRepair', title: 'Create a new Repairs deal', how: 'Repairs → + New repair → Create and add units', start: () => { state.process = 'repair'; render(); openNewRepair(); } },
-  { id: 'repairDetails', title: 'Add the units with Repair Details', how: 'Tick units, enter faults, Save – watch the repair lines and pack charge appear', start: null },
+  { id: 'repairDetails', title: 'Add the units with Repair Details', how: 'Tick units (or + Add new asset for a missing unit), enter faults, Save – watch the repair lines and pack charge appear', start: null },
   { id: 'repairQuote', title: 'Create and send the repair quote', how: 'Create Quote, then Review and send quote → Send quote', start: null },
   { id: 'newSales', title: 'Create a new Sales order', how: 'Sales → + New sales order → Create and add products', start: () => { state.process = 'sales'; render(); openNewSales(); } },
   { id: 'salesPo', title: 'Quote it and confirm the PO', how: 'Add a product, Create Quote, send it, then PO Received with a PO number', start: null },
