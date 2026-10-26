@@ -295,3 +295,10 @@ td.r, th.r { text-align: right; }
 .try-list li.done { background: var(--color-cam-soft); border-color: #bfe3de; }
 .try-list .tick { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--color-border); display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 13px; }
 .try-list li.done .tick { background: var(--color-cam); border-color: var(--color-cam); }
+
+/* ---------- SECTION 20: MOBILE TOP BAR WITH TRY IT ---------- */
+@media (max-width: 800px) {
+  .topbar-actions { flex-wrap: wrap; }
+  .topbar-actions .search { flex: 1 1 100%; }
+  .topbar-actions .btn { flex: 1 1 auto; }
+}
