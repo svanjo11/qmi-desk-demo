@@ -149,6 +149,8 @@ function detailHeader(job) {
         ${job.process === 'sales' ? `<span class="pill plain qmi">${esc(job.dealType)}</span>` : ''}
         <span class="pill prio-${esc(job.priority)}">${esc(job.priority)}</span>
         <span>${esc(job.terms)}</span><span class="sep">|</span>
+        <span>${esc(job.country || 'No country')}</span>
+        <button class="vat-chip ${job.vat && job.vat.source === 'user' ? 'override' : ''}" type="button" id="vat-change" title="Change the VAT treatment">${esc(vatOption(job.vat ? job.vat.id : 'std20').short)}${job.vat && job.vat.source === 'user' ? ' · changed' : ''} ✎</button><span class="sep">|</span>
         <span>Contact: ${esc(job.contact)}</span><span class="sep">|</span>
         <span>Client PO: ${esc(job.clientPo || '–')}</span><span class="sep">|</span>
         <span>Notified ${esc(job.notified)}</span>
@@ -260,7 +262,10 @@ function packagesCard(job) {
 
 // ---------- Quote card: number, status, total, out-of-date warning ----------
 function lineSig(lines) { return lines.filter((l) => l.source !== 'repair').map((l) => l.code + '|' + l.serial + '|' + l.qty).join(';'); }
-function quoteOutOfDate(job) { return job.quote && lineSig(job.quote.lines) !== lineSig(job.lines) && stageOf(job).phase === 'quote'; }
+function quoteOutOfDate(job) {
+  if (!job.quote || stageOf(job).phase !== 'quote') return false;
+  return lineSig(job.quote.lines) !== lineSig(job.lines) || (job.vat && job.quote.vatId !== job.vat.id);
+}
 
 function quoteCard(job) {
   if (!job.quote) {
@@ -271,7 +276,7 @@ function quoteCard(job) {
   }
   const q = job.quote;
   const warn = quoteOutOfDate(job)
-    ? `<div class="qs-warn">The line items have changed since this quote was created. <button class="btn btn-ghost btn-sm" type="button" id="refresh-quote">Update quote</button></div>` : '';
+    ? `<div class="qs-warn">The line items or VAT have changed since this quote was created. <button class="btn btn-ghost btn-sm" type="button" id="refresh-quote">Update quote</button></div>` : '';
   return `<section class="card span-2 quote-strip"><div class="card-body qs">
     <div><h3>Quote ${esc(q.number)}</h3><p class="code">${q.status === 'Sent' ? 'Sent ' + esc(q.sentOn) : 'Draft – not sent yet'} · valid until ${esc(q.expiry)}</p></div>
     <div class="qs-total num">${money(q.total)} <span class="code">inc VAT</span></div>
@@ -354,6 +359,8 @@ function bindDetail(job, s) {
   if (ai) ai.addEventListener('click', () => openInvoice(job));
   const sa = $('#sales-add');
   if (sa) sa.addEventListener('click', () => openAddLine(job));
+  const vc = $('#vat-change');
+  if (vc) vc.addEventListener('click', () => openVat(job));
   const vp = $('#view-po');
   if (vp) vp.addEventListener('click', () => openPO(job));
   const vi = $('#view-invoice');
@@ -526,12 +533,12 @@ function openQuote(job) {
         <table><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>
           ${q.lines.map((l) => `<tr><td>${esc(l.name)}${l.serial ? `<div class="code">Serial Number: ${esc(l.serial)}</div>` : ''}</td><td class="r num">${l.qty}</td><td class="r num">${money(l.price)}</td><td class="r num">${money(l.qty * l.price)}</td></tr>`).join('')}
           <tr><td colspan="3" class="r">Subtotal</td><td class="r num">${money(q.subtotal)}</td></tr>
-          <tr><td colspan="3" class="r">VAT 20%</td><td class="r num">${money(q.vat)}</td></tr>
+          <tr><td colspan="3" class="r">${esc(q.vatShort || 'Standard Rate 20%')}</td><td class="r num">${money(q.vat)}</td></tr>
           <tr class="totals"><td colspan="3" class="r">Total</td><td class="r num">${money(q.total)}</td></tr>
         </tbody></table>
-        <p class="code" style="margin-top:var(--space-3)">Payment terms: ${esc(job.terms)}</p>
+        <p class="code" style="margin-top:var(--space-3)">Payment terms: ${esc(job.terms)} · VAT treatment: ${esc(q.vatLabel || 'Standard Rate (20%)')}</p>
       </div>
-      ${quoteOutOfDate(job) ? '<div class="qs-warn" style="margin-top:var(--space-4)">The line items have changed since this quote was created. Close this window and click Update quote first.</div>' : ''}
+      ${quoteOutOfDate(job) ? '<div class="qs-warn" style="margin-top:var(--space-4)">The line items or VAT have changed since this quote was created. Close this window and click Update quote first.</div>' : ''}
       <h3 class="send-h">Email to customer</h3>
       <div class="form">
         <div class="field"><label for="qm-to">To</label><input id="qm-to" type="email" value="${esc(job.email)}"></div>
@@ -557,6 +564,42 @@ QMI</textarea></div>
   });
 }
 
+// ---------- SECTION 8C1: VAT TREATMENT ----------
+// Default comes from the Account country. The user may pick another
+// treatment, but must give a reason (written to the activity log / Deal).
+function openVat(job) {
+  const def = defaultVatFor(job.country);
+  const cur = job.vat || { id: def.id, source: 'country' };
+  const invSent = job.invoice && job.invoice.status === 'Sent';
+  const quoteSent = job.quote && job.quote.status === 'Sent';
+  openModal(`
+    <div class="m-head"><h2 id="modal-title">VAT treatment · ${esc(job.ref)}</h2><p>Account country: <strong>${esc(job.country || 'not set')}</strong>. Suggested: <strong>${esc(vatOption(def.id).label)}</strong> – ${esc(def.note)}</p></div>
+    <div class="m-body">
+      <div class="assets">${VAT_OPTIONS.map((o) => `<label class="asset"><input type="radio" name="vat-opt" value="${o.id}" ${o.id === cur.id ? 'checked' : ''}>
+        <div><div class="s">${esc(o.label)}${o.id === def.id ? ' <span class="src blueprint">Suggested</span>' : ''}</div><div class="m">Books tax: ${esc(o.booksTax)}</div></div><span class="code">${Math.round(o.rate * 100)}%</span></label>`).join('')}</div>
+      <div class="field" style="margin-top:var(--space-4)" id="vat-reason-wrap"><label for="vat-reason">Reason for changing it (required when not the suggested option)</label><textarea id="vat-reason" placeholder="e.g. Goods are being delivered to a UK address">${cur.source === 'user' ? esc(cur.note) : ''}</textarea></div>
+      ${quoteSent && stageOf(job).phase === 'quote' ? '<div class="qs-warn" style="margin:var(--space-4) 0 0">The quote has already been sent. After changing VAT, click Update quote and send it again.</div>' : ''}
+      ${invSent ? '<div class="qs-warn" style="margin:var(--space-4) 0 0">The invoice has already been sent and keeps its VAT. To correct it, raise a credit note in Books.</div>' : ''}
+      <p class="code" style="margin-top:var(--space-3)">Rule: UK orders use Standard Rate (20%), all other countries Zero Rate (0%). Cambertronics POs always carry UK purchase VAT and are not affected.</p>
+      <p class="code" id="vat-error" role="alert" style="color:var(--color-warn)"></p>
+    </div>
+    <div class="m-foot"><button class="btn btn-ghost" type="button" id="vat-reset">Use suggested</button><div><button class="btn btn-ghost" type="button" data-close>Cancel</button> <button class="btn btn-primary" type="button" id="vat-save">Save VAT</button></div></div>`);
+  $('#vat-reason').addEventListener('input', () => { $('#vat-error').textContent = ''; });
+  $('#vat-reset').addEventListener('click', async () => {
+    await RepairsApi.setVat(job, def.id, 'country', def.note); closeModal(); toast('VAT set to the Account default'); render();
+  });
+  $('#vat-save').addEventListener('click', async () => {
+    const id = (document.querySelector('input[name="vat-opt"]:checked') || {}).value;
+    const reason = $('#vat-reason').value.trim();
+    if (!id) return;
+    if (id !== def.id && !reason) { $('#vat-error').textContent = 'Please give a reason for not using the suggested VAT.'; $('#vat-reason').focus(); return; }
+    if (id === def.id) await RepairsApi.setVat(job, id, 'country', def.note);
+    else await RepairsApi.setVat(job, id, 'user', reason);
+    console.log(LOG_PREFIX + 'VAT on ' + job.ref + ' set to ' + id + (id !== def.id ? ' (override: ' + reason + ')' : ''));
+    closeModal(); toast('VAT saved: ' + vatOption(id).short); render();
+  });
+}
+
 // ---------- SECTION 8C2: CAMBERTRONICS PO – VIEW ----------
 // Read-only: the PO is issued by the CRM step and is already on the portal
 // Job for Cambertronics, so there is nothing to send from here.
@@ -578,7 +621,7 @@ function openPO(job) {
         <table><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>
           ${po.lines.map((l) => `<tr><td>${esc(l.name)}${l.serial ? `<div class="code">Serial Number: ${esc(l.serial)}</div>` : ''}${l.note ? `<div class="code">${esc(l.note)}</div>` : ''}</td><td class="r num">${l.qty}</td><td class="r num">${money(l.price)}</td><td class="r num">${money(l.qty * l.price)}</td></tr>`).join('')}
           <tr><td colspan="3" class="r">Subtotal</td><td class="r num">${money(po.subtotal)}</td></tr>
-          <tr><td colspan="3" class="r">VAT 20%</td><td class="r num">${money(po.vat)}</td></tr>
+          <tr><td colspan="3" class="r">Standard Rate 20% (UK purchase)</td><td class="r num">${money(po.vat)}</td></tr>
           <tr class="totals"><td colspan="3" class="r">Total</td><td class="r num">${money(po.total)}</td></tr>
         </tbody></table>
       </div>
@@ -607,9 +650,10 @@ function openInvoice(job) {
         <table><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>
           ${inv.lines.map((l) => `<tr><td>${esc(l.name)}${l.serial ? `<div class="code">Serial Number: ${esc(l.serial)}</div>` : ''}</td><td class="r num">${l.qty}</td><td class="r num">${money(l.price)}</td><td class="r num">${money(l.qty * l.price)}</td></tr>`).join('')}
           <tr><td colspan="3" class="r">Subtotal</td><td class="r num">${money(inv.subtotal)}</td></tr>
-          <tr><td colspan="3" class="r">VAT 20%</td><td class="r num">${money(inv.vat)}</td></tr>
+          <tr><td colspan="3" class="r">${esc(inv.vatShort || 'Standard Rate 20%')}</td><td class="r num">${money(inv.vat)}</td></tr>
           <tr class="totals"><td colspan="3" class="r">Total due</td><td class="r num">${money(inv.total)}</td></tr>
         </tbody></table>
+        <p class="code" style="margin-top:var(--space-3)">VAT treatment: ${esc(inv.vatLabel || 'Standard Rate (20%)')}</p>
       </div>
       <h3 class="send-h">Email to customer</h3>
       <div class="form">

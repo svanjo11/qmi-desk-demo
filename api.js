@@ -61,6 +61,7 @@ const MockAdapter = {
       clientPo: form.clientPo, units: [], lines: [], docs: [], sync: {}, quote: null,
       email: (form.contact || 'contact').toLowerCase().replace(/[^a-z]+/g, '.') + '@' + form.customer.toLowerCase().replace(/[^a-z]+/g, '') + '.example',
       log: [{ when: nowText(), text: 'Repairs Deal created in Repairs Desk' }],
+      country: CUSTOMER_COUNTRY[form.customer] || '', vat: (() => { const d = defaultVatFor(CUSTOMER_COUNTRY[form.customer]); return { id: d.id, source: 'country', note: d.note }; })(),
     };
     this.jobs.unshift(job);
     return job;
@@ -75,6 +76,7 @@ const MockAdapter = {
       units: [], lines: [], docs: [], sync: {}, packages: [], quote: null, invoice: null,
       email: (form.contact || 'contact').toLowerCase().replace(/[^a-z]+/g, '.') + '@' + form.customer.toLowerCase().replace(/[^a-z]+/g, '') + '.example',
       log: [{ when: nowText(), text: form.dealType + ' Deal created in QMI Desk' }],
+      country: CUSTOMER_COUNTRY[form.customer] || '', vat: (() => { const d = defaultVatFor(CUSTOMER_COUNTRY[form.customer]); return { id: d.id, source: 'country', note: d.note }; })(),
     };
     this.jobs.unshift(job);
     return job;
@@ -106,7 +108,7 @@ const MockAdapter = {
     if (current.stage === 'Service Reference Generated') {
       const ref = 'QT-0002' + (20 + this.jobs.indexOf(job));
       job.docs.push({ type: 'Quote', ref });
-      job.quote = makeQuote(ref, job.lines, 'Draft');
+      job.quote = makeQuote(ref, job.lines, 'Draft'); stampVat(job.quote, job);
     }
     if (current.stage === 'Quote Sent') { job.sync.job = 'Success'; job.units.forEach((x) => (x.portal = 'Awaiting goods')); }
     if (current.stage === 'Goods Received / GRN Issued') {
@@ -119,7 +121,7 @@ const MockAdapter = {
     if (current.stage === 'Package Ready' && !job.invoice) {
       const ref = 'INV-0001' + (40 + this.jobs.indexOf(job));
       job.docs.push({ type: 'Invoice', ref });
-      job.invoice = makeInvoice(ref, job.lines, 'Draft');
+      job.invoice = makeInvoice(ref, job.lines, 'Draft'); stampVat(job.invoice, job);
       job.log.push({ when: nowText(), text: 'Invoice ' + ref + ' raised (draft) and added to the portal Job' });
     }
     job.stage = next.stage;
@@ -143,7 +145,7 @@ const MockAdapter = {
         if (!job.lines.length) throw new Error('Add at least one product first');
         const ref = 'QT-0002' + n;
         job.docs.push({ type: 'Quote', ref });
-        job.quote = makeQuote(ref, job.lines, 'Draft');
+        job.quote = makeQuote(ref, job.lines, 'Draft'); stampVat(job.quote, job);
         job.log.push({ when: nowText(), text: 'Quote ' + ref + ' created' });
         job.stage = 'Quote Drafting';
         break;
@@ -153,7 +155,7 @@ const MockAdapter = {
         if (job.terms === 'Due on Receipt') {
           const ref = 'INV-0001' + n;
           job.docs.push({ type: 'Pre-payment invoice', ref });
-          job.invoice = makeInvoice(ref, job.lines, 'Draft', 'Pre-payment invoice');
+          job.invoice = makeInvoice(ref, job.lines, 'Draft', 'Pre-payment invoice'); stampVat(job.invoice, job);
           job.log.push({ when: nowText(), text: 'PO Received – pre-pay invoice ' + ref + ' raised' });
           job.stage = 'Pre-Pay Awaiting Payment';
         } else {
@@ -168,7 +170,7 @@ const MockAdapter = {
         if (!job.invoice) {
           const ref = 'INV-0001' + n;
           job.docs.push({ type: 'Invoice', ref });
-          job.invoice = makeInvoice(ref, job.lines, 'Draft');
+          job.invoice = makeInvoice(ref, job.lines, 'Draft'); stampVat(job.invoice, job);
           job.log.push({ when: nowText(), text: 'Invoice ' + ref + ' raised (draft)' });
         }
         job.log.push({ when: nowText(), text: 'Courier confirmed – Airway Bill sent to the portal' });
@@ -183,8 +185,9 @@ const MockAdapter = {
   // refreshQuote: rebuild the draft quote from the current line items
   // (live: create_estimate updates the Books Estimate from Items Required)
   async refreshQuote(job) {
-    job.quote = makeQuote(job.quote.number, job.lines.filter((l) => l.source !== 'repair'), job.quote.status === 'Sent' ? 'Draft' : job.quote.status);
-    job.log.push({ when: nowText(), text: 'Quote ' + job.quote.number + ' updated from the line items' });
+    job.quote = makeQuote(job.quote.number, job.lines.filter((l) => l.source !== 'repair'), job.quote.status === 'Sent' ? 'Draft' : job.quote.status); stampVat(job.quote, job);
+    stampVat(job.quote, job);
+    job.log.push({ when: nowText(), text: 'Quote ' + job.quote.number + ' updated from the line items and VAT' });
     return job;
   },
 
@@ -195,6 +198,17 @@ const MockAdapter = {
     job.quote.sentOn = nowText();
     job.log.push({ when: nowText(), text: 'Quote ' + job.quote.number + ' emailed to ' + mail.to });
     if (job.stage === 'Quote Drafting') job.stage = 'Quote Sent';
+    return job;
+  },
+
+  // setVat: change the VAT treatment (user override or back to the Account default)
+  // live: updates the Deal VAT fields; the next quote / draft invoice uses the matching Books tax_id
+  async setVat(job, id, source, note) {
+    const before = vatOption(job.vat.id).short;
+    job.vat = { id, source, note };
+    if (job.quote && job.quote.status === 'Draft') stampVat(job.quote, job);
+    if (job.invoice && job.invoice.status === 'Draft') stampVat(job.invoice, job);
+    job.log.push({ when: nowText(), text: 'VAT changed from ' + before + ' to ' + vatOption(id).short + (source === 'user' ? ' – reason: ' + note : ' (Account default)') });
     return job;
   },
 

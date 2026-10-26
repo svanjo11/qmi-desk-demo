@@ -89,7 +89,37 @@ function buildLinesForUnits(units) {
   return lines;
 }
 
-// Quote (Zoho Books Estimate) snapshot of the line items. VAT 20%.
+// ---------- SECTION 3B: VAT TREATMENT ----------
+// The Account's country sets the default VAT treatment for the quote and
+// invoice. The user can override it with a reason (logged on the Deal).
+// booksTax: the active Books tax (Books → Settings → Taxes, 26-Oct-2026:
+// "Standard Rate" 20% and "Zero Rate" 0%). Rule: UK orders 20%, all others 0%. Cambertronics POs always carry UK purchase
+// VAT (20%) because Cambertronics is a UK supplier.
+const VAT_OPTIONS = [
+  { id: 'std20', label: 'Standard Rate (20%)', short: 'Standard Rate 20%', rate: 0.2, booksTax: 'Standard Rate' },
+  { id: 'zero', label: 'Zero Rate (0%)', short: 'Zero Rate 0%', rate: 0, booksTax: 'Zero Rate' },
+];
+const UK_COUNTRIES = ['united kingdom', 'uk', 'great britain', 'gb', 'england', 'scotland', 'wales', 'northern ireland'];
+function vatOption(id) { return VAT_OPTIONS.find((o) => o.id === id) || VAT_OPTIONS[0]; }
+// defaultVatFor: UK (or no country on the Account) -> Standard Rate 20%; any other country -> Zero Rate 0%
+function defaultVatFor(country) {
+  const c = String(country || '').trim().toLowerCase();
+  if (!c) return { id: 'std20', note: 'No country on the Account – 20% used. Add the country to the Account.' };
+  if (UK_COUNTRIES.includes(c)) return { id: 'std20', note: 'UK order' };
+  return { id: 'zero', note: 'Order from outside the UK (' + country + ')' };
+}
+// stampVat: apply the job's VAT treatment to a quote or invoice
+function stampVat(doc, job) {
+  if (!doc) return doc;
+  const opt = vatOption(job.vat ? job.vat.id : 'std20');
+  doc.vatId = opt.id; doc.vatShort = opt.short; doc.vatLabel = opt.label; doc.vatRate = opt.rate;
+  doc.vat = doc.subtotal * opt.rate; doc.total = doc.subtotal + doc.vat;
+  return doc;
+}
+// Demo Account countries (live: Accounts.Billing_Country)
+const CUSTOMER_COUNTRY = { 'Northsea Shipping Ltd': 'Norway', 'Baltic Marine Services': 'Lithuania', 'Demo Generation Ltd': 'United Kingdom', 'QMI TEST': 'United Kingdom' };
+
+// Quote (Zoho Books Estimate) snapshot of the line items. VAT from stampVat().
 // live: GET books/v3/estimates/{Estimate_ID}
 const VAT_RATE = 0.2;
 function makeQuote(number, lines, status, sentOn) {
@@ -212,7 +242,10 @@ const DEMO_JOBS_RAW = [
 ];
 
 // Attach a quote to every demo job that already has one, then expose DEMO_JOBS
-function prepareDemoJob(j) {
+function prepareDemoJob(j0) {
+  const country = CUSTOMER_COUNTRY[j0.customer] || '';
+  const d = defaultVatFor(country);
+  const j = { ...j0, country, vat: { id: d.id, source: 'country', note: d.note } };
   const q = j.docs.find((d) => d.type === 'Quote');
   const contactEmail = j.contact.toLowerCase().replace(/[^a-z]+/g, '.') + '@' + j.customer.toLowerCase().replace(/[^a-z]+/g, '') + '.example';
   const quoteLines = j.lines.filter((l) => l.source !== 'repair');
@@ -220,9 +253,9 @@ function prepareDemoJob(j) {
   const poDoc = j.docs.find((d) => /PO$/.test(d.type));
   return {
     ...j, email: contactEmail,
-    quote: q ? makeQuote(q.ref, quoteLines, 'Sent', q.ref === 'QT-000214' ? '22 Oct 2026' : '—') : null,
+    quote: q ? stampVat(makeQuote(q.ref, quoteLines, 'Sent', q.ref === 'QT-000214' ? '22 Oct 2026' : '—'), j) : null,
     po: poDoc ? makePO(poDoc.ref, j, 'Issued', '—') : null,
-    invoice: inv ? makeInvoice(inv.ref, j.lines, j.draftInvoice ? 'Draft' : 'Sent', inv.type === 'Pre-payment invoice' ? 'Pre-payment invoice' : 'Invoice', '23 Oct 2026') : null,
+    invoice: inv ? stampVat(makeInvoice(inv.ref, j.lines, j.draftInvoice ? 'Draft' : 'Sent', inv.type === 'Pre-payment invoice' ? 'Pre-payment invoice' : 'Invoice', '23 Oct 2026'), j) : null,
   };
 }
 const DEMO_JOBS = DEMO_JOBS_RAW.map((j) => prepareDemoJob({ process: 'repair', ...j }));
