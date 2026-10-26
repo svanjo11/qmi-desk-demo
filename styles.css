@@ -310,3 +310,7 @@ td.r, th.r { text-align: right; }
 .vat-chip { border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-qmi); font-weight: 600; font-size: var(--text-xs); border-radius: 999px; padding: 2px 10px; }
 .vat-chip:hover { background: var(--color-qmi-soft); }
 .vat-chip.override { border-color: var(--color-amber); color: var(--color-amber); background: var(--color-amber-soft); }
+
+/* ---------- SECTION 23: VAT ROW IN QUOTE / INVOICE ---------- */
+.vat-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); }
+.vat-chip u { text-underline-offset: 2px; }

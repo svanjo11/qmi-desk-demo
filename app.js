@@ -150,7 +150,7 @@ function detailHeader(job) {
         <span class="pill prio-${esc(job.priority)}">${esc(job.priority)}</span>
         <span>${esc(job.terms)}</span><span class="sep">|</span>
         <span>${esc(job.country || 'No country')}</span>
-        <button class="vat-chip ${job.vat && job.vat.source === 'user' ? 'override' : ''}" type="button" id="vat-change" title="Change the VAT treatment">${esc(vatOption(job.vat ? job.vat.id : 'std20').short)}${job.vat && job.vat.source === 'user' ? ' · changed' : ''} ✎</button><span class="sep">|</span>
+        <button class="vat-chip ${job.vat && job.vat.source === 'user' ? 'override' : ''}" type="button" id="vat-change" title="Change the VAT rate">VAT: ${esc(vatOption(job.vat ? job.vat.id : 'std20').short)}${job.vat && job.vat.source === 'user' ? ' (changed)' : ''} · <u>Change</u></button><span class="sep">|</span>
         <span>Contact: ${esc(job.contact)}</span><span class="sep">|</span>
         <span>Client PO: ${esc(job.clientPo || '–')}</span><span class="sep">|</span>
         <span>Notified ${esc(job.notified)}</span>
@@ -536,9 +536,10 @@ function openQuote(job) {
           <tr><td colspan="3" class="r">${esc(q.vatShort || 'Standard Rate 20%')}</td><td class="r num">${money(q.vat)}</td></tr>
           <tr class="totals"><td colspan="3" class="r">Total</td><td class="r num">${money(q.total)}</td></tr>
         </tbody></table>
-        <p class="code" style="margin-top:var(--space-3)">Payment terms: ${esc(job.terms)} · VAT treatment: ${esc(q.vatLabel || 'Standard Rate (20%)')}</p>
+        <div class="vat-row"><span class="code">Payment terms: ${esc(job.terms)} · VAT: <strong>${esc(q.vatLabel || 'Standard Rate (20%)')}</strong> (${esc(job.country || 'no country')})</span>
+          ${sent && stageOf(job).phase !== 'quote' ? '' : '<button class="btn btn-ghost btn-sm" type="button" id="qm-vat">Change VAT</button>'}</div>
       </div>
-      ${quoteOutOfDate(job) ? '<div class="qs-warn" style="margin-top:var(--space-4)">The line items or VAT have changed since this quote was created. Close this window and click Update quote first.</div>' : ''}
+      ${quoteOutOfDate(job) ? '<div class="qs-warn" style="margin-top:var(--space-4)">The line items or VAT have changed since this quote was created. <button class="btn btn-ghost btn-sm" type="button" id="qm-refresh">Update quote now</button></div>' : ''}
       <h3 class="send-h">Email to customer</h3>
       <div class="form">
         <div class="field"><label for="qm-to">To</label><input id="qm-to" type="email" value="${esc(job.email)}"></div>
@@ -553,6 +554,10 @@ QMI</textarea></div>
       </div>
     </div>
     <div class="m-foot"><button class="btn btn-ghost" type="button" id="qm-pdf">Download PDF</button><div><button class="btn btn-ghost" type="button" data-close>Close</button> <button class="btn btn-primary" type="button" id="qm-send" ${quoteOutOfDate(job) ? 'disabled' : ''}>${sent ? 'Resend quote' : 'Send quote'}</button></div></div>`);
+  const qr = $('#qm-refresh');
+  if (qr) qr.addEventListener('click', async () => { await RepairsApi.refreshQuote(job); toast('Quote updated'); render(); openQuote(job); });
+  const qv = $('#qm-vat');
+  if (qv) qv.addEventListener('click', () => openVat(job, () => openQuote(job)));
   $('#qm-pdf').addEventListener('click', () => toast(IS_DEMO ? 'In CRM this downloads the Books quote PDF' : 'Downloading PDF'));
   $('#qm-send').addEventListener('click', async () => {
     const to = $('#qm-to').value.trim();
@@ -567,7 +572,9 @@ QMI</textarea></div>
 // ---------- SECTION 8C1: VAT TREATMENT ----------
 // Default comes from the Account country. The user may pick another
 // treatment, but must give a reason (written to the activity log / Deal).
-function openVat(job) {
+// after: optional callback to reopen the screen the user came from (quote / invoice)
+function openVat(job, after) {
+  const done = (msg) => { closeModal(); toast(msg); render(); if (after) after(); };
   const def = defaultVatFor(job.country);
   const cur = job.vat || { id: def.id, source: 'country' };
   const invSent = job.invoice && job.invoice.status === 'Sent';
@@ -583,10 +590,11 @@ function openVat(job) {
       <p class="code" style="margin-top:var(--space-3)">Rule: UK orders use Standard Rate (20%), all other countries Zero Rate (0%). Cambertronics POs always carry UK purchase VAT and are not affected.</p>
       <p class="code" id="vat-error" role="alert" style="color:var(--color-warn)"></p>
     </div>
-    <div class="m-foot"><button class="btn btn-ghost" type="button" id="vat-reset">Use suggested</button><div><button class="btn btn-ghost" type="button" data-close>Cancel</button> <button class="btn btn-primary" type="button" id="vat-save">Save VAT</button></div></div>`);
+    <div class="m-foot"><button class="btn btn-ghost" type="button" id="vat-reset">Use suggested</button><div><button class="btn btn-ghost" type="button" id="vat-cancel">Cancel</button> <button class="btn btn-primary" type="button" id="vat-save">Save VAT</button></div></div>`);
   $('#vat-reason').addEventListener('input', () => { $('#vat-error').textContent = ''; });
+  $('#vat-cancel').addEventListener('click', () => { closeModal(); if (after) after(); });
   $('#vat-reset').addEventListener('click', async () => {
-    await RepairsApi.setVat(job, def.id, 'country', def.note); closeModal(); toast('VAT set to the Account default'); render();
+    await RepairsApi.setVat(job, def.id, 'country', def.note); done('VAT set to the suggested rate');
   });
   $('#vat-save').addEventListener('click', async () => {
     const id = (document.querySelector('input[name="vat-opt"]:checked') || {}).value;
@@ -596,7 +604,7 @@ function openVat(job) {
     if (id === def.id) await RepairsApi.setVat(job, id, 'country', def.note);
     else await RepairsApi.setVat(job, id, 'user', reason);
     console.log(LOG_PREFIX + 'VAT on ' + job.ref + ' set to ' + id + (id !== def.id ? ' (override: ' + reason + ')' : ''));
-    closeModal(); toast('VAT saved: ' + vatOption(id).short); render();
+    done('VAT saved: ' + vatOption(id).short);
   });
 }
 
@@ -653,7 +661,8 @@ function openInvoice(job) {
           <tr><td colspan="3" class="r">${esc(inv.vatShort || 'Standard Rate 20%')}</td><td class="r num">${money(inv.vat)}</td></tr>
           <tr class="totals"><td colspan="3" class="r">Total due</td><td class="r num">${money(inv.total)}</td></tr>
         </tbody></table>
-        <p class="code" style="margin-top:var(--space-3)">VAT treatment: ${esc(inv.vatLabel || 'Standard Rate (20%)')}</p>
+        <div class="vat-row"><span class="code">VAT: <strong>${esc(inv.vatLabel || 'Standard Rate (20%)')}</strong> (${esc(job.country || 'no country')})</span>
+          ${sent ? '<span class="code">Sent invoices keep their VAT – raise a credit note in Books to correct it</span>' : '<button class="btn btn-ghost btn-sm" type="button" id="iv-vat">Change VAT</button>'}</div>
       </div>
       <h3 class="send-h">Email to customer</h3>
       <div class="form">
@@ -669,6 +678,8 @@ QMI</textarea></div>
       </div>
     </div>
     <div class="m-foot"><button class="btn btn-ghost" type="button" id="iv-pdf">Download PDF</button><div><button class="btn btn-ghost" type="button" data-close>Close</button> <button class="btn btn-primary" type="button" id="iv-send">${sent ? 'Resend invoice' : 'Email invoice'}</button></div></div>`);
+  const ivv = $('#iv-vat');
+  if (ivv) ivv.addEventListener('click', () => openVat(job, () => openInvoice(job)));
   $('#iv-pdf').addEventListener('click', () => toast(IS_DEMO ? 'In CRM this downloads the Books invoice PDF' : 'Downloading PDF'));
   $('#iv-send').addEventListener('click', async () => {
     const to = $('#iv-to').value.trim();
