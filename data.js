@@ -33,7 +33,7 @@ const STAGES = [
   { stage: 'Repair Request Received', phase: 'book', owner: 'qmi', action: 'Add units (Repair Details)', transition: 'Repair Details', help: 'Pick the customer\'s units and enter each fault. The line items are created for you.' },
   { stage: 'Service Reference Generated', phase: 'quote', owner: 'qmi', action: 'Create Quote', transition: 'Create Quote', help: 'The repair lines are ready. Add any extra items if needed, then create the quote.' },
   { stage: 'Quote Drafting', phase: 'quote', owner: 'qmi', action: 'Review and send quote', transition: 'Quote Sent', help: 'Check the quote, then email it to the customer from here.' },
-  { stage: 'Quote Sent', phase: 'quote', owner: 'qmi', action: 'Send Customer Acknowledgement', transition: 'Send Customer Acknowledgement', help: 'Emails the Service Reference and creates the Cambertronics portal Job. Pre-pay customers: raise the pre-payment invoice first.' },
+  { stage: 'Quote Sent', phase: 'quote', owner: 'qmi', action: 'Send Customer Acknowledgement', transition: 'Send Customer Acknowledgement', help: 'Confirm the customer\'s PO number first – the customer should have sent one by now. Emails the Service Reference and creates the Cambertronics portal Job. Pre-pay customers: raise the pre-payment invoice first.' },
   { stage: 'Pre-Pay Awaiting Payment', phase: 'quote', owner: 'qmi', action: 'Pre-Payment Invoice Paid', transition: 'Pre-Payment Invoice Paid', help: 'Click once Finance confirm the payment has arrived.' },
   { stage: 'Acknowledgement Sent', phase: 'inbound', owner: 'qmi', action: 'Record Goods In Transit', transition: 'Goods In Transit', help: 'Enter the expected date and carrier once the customer has sent the units.' },
   { stage: 'Goods in Transit', phase: 'inbound', owner: 'cam', action: null, transition: null, help: 'Waiting for Cambertronics to confirm Goods Receipt in the portal.' },
@@ -240,6 +240,22 @@ const DEMO_JOBS_RAW = [
     log: [{ when: '03 Oct 12:20', text: 'Goods In Transit recorded – DHL, expected 05 Oct' }],
   },
 ];
+
+// ---------- SECTION 6A: COURIER / SHIPPING ----------
+// Fields and rules = CRM function fn_updateShippingAndCourier (Blueprint
+// transition "Confirm Courier and Invoice Customer"). The function stops if a
+// required field is missing, and the Airway Bill is REQUIRED because it is
+// uploaded to the Creator Job (the portal's only copy of the document).
+// Picklists = CRM Deals field values (26-Oct-2026).
+const DISPATCH_CARRIERS = ['FedEx', 'Collect', 'DHL', 'UPS', 'TNT', 'Royal Mail', 'Other'];
+const SHIPPING_COUNTRIES = ["Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua & Deps", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan", "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia Herzegovina", "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina", "Burundi", "Cambodia", "Cameroon", "Canada", "Cape Verde", "Central African Rep", "Chad", "Chile", "China", "Colombia", "Comoros", "Congo", "Congo (Democratic Rep)", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czech Republic", "Denmark", "Djibouti", "Dominica", "Dominican Republic", "East Timor", "Ecuador", "Egypt", "El Salvador", "Equatorial Guinea", "Eritrea", "Estonia", "Ethiopia", "Fiji", "Finland", "France", "Gabon", "Gambia", "Georgia", "Germany", "Ghana", "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana", "Haiti", "Honduras", "Hungary", "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland (Republic)", "Israel", "Italy", "Ivory Coast", "Jamaica", "Japan", "Jordan", "Kazakhstan", "Kenya", "Kiribati", "Korea North", "Korea South", "Kosovo", "Kuwait", "Kyrgyzstan", "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg", "Macedonia", "Madagascar", "Malawi", "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius", "Mexico", "Micronesia", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco", "Mozambique", "Myanmar, (Burma)", "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand", "Nicaragua", "Niger", "Nigeria", "Norway", "Oman", "Pakistan", "Palau", "Panama", "Papua New Guinea", "Paraguay", "Peru", "Philippines", "Poland", "Portugal", "Qatar", "Romania", "Russian Federation", "Rwanda", "St Kitts & Nevis", "St Lucia", "Saint Vincent & the Grenadines", "Samoa", "San Marino", "Sao Tome & Principe", "Saudi Arabia", "Senegal", "Serbia", "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands", "Somalia", "South Africa", "South Sudan", "Spain", "Sri Lanka", "Sudan", "Suriname", "Swaziland", "Sweden", "Switzerland", "Syria", "Taiwan", "Tajikistan", "Tanzania", "Thailand", "Togo", "Tonga", "Trinidad & Tobago", "Tunisia", "Turkey", "Turkmenistan", "Tuvalu", "Uganda", "Ukraine", "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan", "Vanuatu", "Vatican City", "Venezuela", "Vietnam", "Yemen", "Zambia", "Zimbabwe", "Hong Kong"];
+// Demo shipping addresses per Account (live: Deal / Account shipping address)
+const DEMO_SHIPPING = {
+  'Northsea Shipping Ltd': { street: 'Strandveien 50', street2: '', city: 'Lysaker', county: 'Viken', postCode: '1366', country: 'Norway' },
+  'Baltic Marine Services': { street: 'Naujoji uosto g. 8', street2: '', city: 'Klaipeda', county: '', postCode: '92125', country: 'Lithuania' },
+  'Demo Generation Ltd': { street: 'Unit 4, Riverside Park', street2: 'Mill Lane', city: 'Southampton', county: 'Hampshire', postCode: 'SO14 2AA', country: 'United Kingdom' },
+  'QMI TEST': { street: '1 Test Street', street2: '', city: 'Aberdeen', county: 'Aberdeenshire', postCode: 'AB10 1AA', country: 'United Kingdom' },
+};
 
 // ---------- SECTION 6B: CONTACTS ----------
 // Demo Contacts per Account (live: CRM Contacts where Account_Name = the Account).

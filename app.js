@@ -133,6 +133,7 @@ function renderDetail() {
       ${linesCard(job)}
       ${quoteCard(job)}
       ${poCard(job)}
+      ${shippingCard(job)}
       ${invoiceCard(job)}
       ${job.process === 'sales' ? packagesCard(job) : unitsCard(job)}
       ${docsCard(job)}
@@ -279,10 +280,28 @@ function quoteCard(job) {
     ? `<div class="qs-warn">The line items or VAT have changed since this quote was created. <button class="btn btn-ghost btn-sm" type="button" id="refresh-quote">Update quote</button></div>` : '';
   return `<section class="card span-2 quote-strip"><div class="card-body qs">
     <div><h3>Quote ${esc(q.number)}</h3><p class="code">${q.status === 'Sent' ? 'Sent ' + esc(q.sentOn) : 'Draft – not sent yet'} · valid until ${esc(q.expiry)}</p></div>
-    <div class="qs-total num">${money(q.total)} <span class="code">inc VAT</span></div>
+    <div class="qs-total num">${money(q.total)} <span class="code">${vatTotalNote(q)}</span></div>
     <span class="pill ${q.status === 'Sent' ? 'cam' : 'qmi'}">${esc(q.status)}</span>
     <button class="btn ${q.status === 'Sent' ? 'btn-ghost' : 'btn-primary'}" type="button" id="view-quote">${q.status === 'Sent' ? 'View quote' : 'View and send'}</button>
   </div>${warn}</section>`;
+}
+
+// vatTotalNote: says which VAT the total includes, so 0% totals aren't read as "inc 20%"
+function vatTotalNote(doc) {
+  const rate = doc.vatRate === undefined ? 0.2 : doc.vatRate;
+  return rate === 0 ? 'Zero Rate – no VAT' : 'inc ' + Math.round(rate * 100) + '% VAT (' + money(doc.vat) + ')';
+}
+
+// ---------- Courier / shipping card (after Confirm Courier) ----------
+function shippingCard(job) {
+  const sh = job.shipping;
+  if (!sh) return '';
+  const addr = [sh.attention, sh.street, sh.street2, sh.city, sh.county, sh.postCode, sh.country].filter(Boolean).join(', ');
+  const courier = sh.customerArranging ? 'Customer arranging own courier' : esc(sh.carrier) + ' · ' + (sh.trackingUrl ? `<a href="${esc(sh.trackingUrl)}" target="_blank" rel="noopener">${esc(sh.tracking)}</a>` : esc(sh.tracking));
+  return `<section class="card span-2 quote-strip"><div class="card-body qs">
+    <div><h3>Courier</h3><p class="code">${courier}${sh.dispatchDate ? ' · dispatch ' + esc(sh.dispatchDate) : ''} · Airway Bill: ${esc(sh.airwayBill)}</p><p class="code">Ship to: ${esc(addr)}</p></div>
+    <span class="pill cam">Sent to portal</span>
+  </div></section>`;
 }
 
 // ---------- Cambertronics PO card ----------
@@ -298,7 +317,7 @@ function poCard(job) {
   const po = job.po;
   return `<section class="card span-2 quote-strip"><div class="card-body qs">
     <div><h3>${label} ${esc(po.number)}</h3><p class="code">To ${esc(po.vendor)} · ${po.lines.length} line${po.lines.length === 1 ? '' : 's'}${po.issuedOn && po.issuedOn !== '—' ? ' · issued ' + esc(po.issuedOn) : ''}</p></div>
-    <div class="qs-total num">${money(po.total)} <span class="code">inc VAT</span></div>
+    <div class="qs-total num">${money(po.total)} <span class="code">inc 20% UK purchase VAT</span></div>
     <span class="pill cam">${esc(po.status)}</span>
     <button class="btn btn-ghost" type="button" id="view-po">View PO</button>
   </div></section>`;
@@ -310,7 +329,7 @@ function invoiceCard(job) {
   const inv = job.invoice;
   return `<section class="card span-2 quote-strip"><div class="card-body qs">
     <div><h3>${esc(inv.kind)} ${esc(inv.number)}</h3><p class="code">${inv.status === 'Sent' ? 'Emailed ' + esc(inv.sentOn) : 'Raised – not emailed to the customer yet'} · ${esc(job.terms)}</p></div>
-    <div class="qs-total num">${money(inv.total)} <span class="code">inc VAT</span></div>
+    <div class="qs-total num">${money(inv.total)} <span class="code">${vatTotalNote(inv)}</span></div>
     <span class="pill ${inv.status === 'Sent' ? 'cam' : 'qmi'}">${inv.status === 'Sent' ? 'Sent' : 'Not sent'}</span>
     <button class="btn ${inv.status === 'Sent' ? 'btn-ghost' : 'btn-primary'}" type="button" id="view-invoice">${inv.status === 'Sent' ? 'View invoice' : 'View and email'}</button>
   </div></section>`;
@@ -351,6 +370,8 @@ function bindDetail(job, s) {
     if (job.process === 'sales' && (job.stage === 'Quote Sent' || job.stage === 'Order Blocked')) return openPoReceived(job);
     if (job.stage === 'Quote Drafting') return openQuote(job);
     if (job.stage === 'Invoice Issued') return openInvoice(job);
+    if (job.stage === 'Package Ready') return openCourier(job);
+    if (job.process === 'repair' && job.stage === 'Quote Sent') return openAcknowledgement(job);
     return runStep(job, s);
   });
   const vq = $('#view-quote');
@@ -573,6 +594,130 @@ QMI</textarea></div>
     if (job.process === 'repair') markTry('repairQuote');
     console.log(LOG_PREFIX + 'Quote ' + q.number + ' sent to ' + to);
     closeModal(); toast('Quote ' + q.number + ' sent to ' + to); render();
+  });
+}
+
+// ---------- SECTION 8L: SEND CUSTOMER ACKNOWLEDGEMENT (Repairs) ----------
+// The customer must have sent their PO by now, so the Client PO Number
+// (Deal field Client_PO_Number) is confirmed before the acknowledgement
+// is emailed and the portal Job is created. Placeholders such as "TBC"
+// are not accepted.
+const PO_PLACEHOLDERS = ['', 'tbc', 'tba', 'n/a', 'na', 'none', '-', '–', 'to follow', 'pending', 'awaiting po', 'po to follow'];
+function isRealClientPo(v) { return !PO_PLACEHOLDERS.includes(String(v || '').trim().toLowerCase()); }
+
+function openAcknowledgement(job) {
+  const cur = isRealClientPo(job.clientPo) ? job.clientPo : '';
+  openModal(`
+    <div class="m-head"><h2 id="modal-title">Send Customer Acknowledgement · ${esc(job.ref)}</h2><p>The customer should have sent their purchase order by now. Confirm their PO number before the acknowledgement goes out and the Cambertronics portal Job is created.</p></div>
+    <div class="m-body"><div class="form">
+      <div class="field"><label for="ak-po">Client PO Number *</label><input id="ak-po" value="${esc(cur)}" placeholder="From the customer's purchase order" autocomplete="off">
+        ${job.clientPo && !cur ? `<span class="code">Currently on the Deal: "${esc(job.clientPo)}" – replace it with the real PO number.</span>` : ''}</div>
+      <div class="field"><label for="ak-file">Customer PO document</label><input id="ak-file" type="file" accept=".pdf,image/*,.msg,.eml"><span class="code">Optional – attached to the Deal</span></div>
+      <div class="field full"><label class="check"><input type="checkbox" id="ak-ok"> I've checked this PO number against the customer's purchase order *</label></div>
+    </div>
+    <p class="code" style="margin-top:var(--space-3)">The acknowledgement with Service Reference ${esc(job.ref)} is emailed to ${esc(job.contact)}${job.email ? ' (' + esc(job.email) + ')' : ''}.${job.terms === 'Due on Receipt' ? ' Pre-pay customer: the pre-payment invoice is raised next.' : ''}</p>
+    <p class="code cr-err" id="ak-err" role="alert"></p></div>
+    <div class="m-foot"><span class="hint">Saves Client PO Number on the Deal</span><div><button class="btn btn-ghost" type="button" data-close>Cancel</button> <button class="btn btn-primary" type="button" id="ak-send">Confirm PO and send acknowledgement</button></div></div>`);
+  ['ak-po', 'ak-ok'].forEach((id) => $('#' + id).addEventListener('input', () => { $('#ak-err').textContent = ''; $('#ak-po').classList.remove('invalid'); }));
+  $('#ak-send').addEventListener('click', async () => {
+    const po = $('#ak-po').value.trim();
+    if (!isRealClientPo(po)) { $('#ak-po').classList.add('invalid'); $('#ak-err').textContent = po ? '"' + po + '" isn\'t a PO number. Enter the number from the customer\'s purchase order.' : 'Enter the Client PO Number from the customer\'s purchase order.'; $('#ak-po').focus(); return; }
+    if (!$('#ak-ok').checked) { $('#ak-err').textContent = 'Tick to confirm you have checked the PO number against the customer\'s purchase order.'; return; }
+    const before = job.clientPo;
+    job.clientPo = po;
+    const f = $('#ak-file').files[0];
+    job.log.push({ when: nowText(), text: 'Client PO Number confirmed: ' + po + (before && before !== po ? ' (was "' + before + '")' : '') + (f ? ' – PO document ' + f.name + ' attached' : '') });
+    console.log(LOG_PREFIX + 'Client PO confirmed on ' + job.ref + ': ' + po);
+    closeModal();
+    await runStep(job, stageOf(job));
+  });
+}
+
+// ---------- SECTION 8K: CONFIRM COURIER AND INVOICE CUSTOMER ----------
+// Same fields and rules as the CRM kiosk / fn_updateShippingAndCourier:
+//   Always required : Shipping Attention, Street, City, Post Code, Country, Airway Bill file
+//   QMI books courier: Dispatch Carrier + Tracking Reference required
+//   Customer arranges: Courier/Freight Requirements required
+// Everything here is copied to the Cambertronics portal Package and Job.
+function openCourier(job) {
+  const a = DEMO_SHIPPING[job.customer] || { street: '', street2: '', city: '', county: '', postCode: '', country: job.country || '' };
+  const sh = job.shipping || {};
+  const v = (k, d) => esc(sh[k] !== undefined ? sh[k] : d);
+  const willInvoice = !job.invoice;
+  const boxes = (job.packages || []).length ? job.packages.map((p) => `${esc(p.box)}: ${esc(p.size)}, ${esc(p.weight)}`).join(' · ') : '';
+  openModal(`
+    <div class="m-head"><h2 id="modal-title">Confirm courier${willInvoice ? ' and invoice customer' : ''} · ${esc(job.ref)}</h2><p>These details go to the Cambertronics portal so they can label and hand over the parcel. Fields marked * are required.</p></div>
+    <div class="m-body">
+      ${boxes ? `<div class="qs-warn info-note">Boxes from Cambertronics: ${boxes}</div>` : ''}
+      <h3 class="send-h">Ship to</h3>
+      <div class="form">
+        <div class="field full"><label for="cr-att">Shipping Attention *</label><input id="cr-att" value="${v('attention', job.contact)}"></div>
+        <div class="field full"><label for="cr-street">Shipping Street *</label><input id="cr-street" value="${v('street', a.street)}"></div>
+        <div class="field full"><label for="cr-street2">Shipping Street 2</label><input id="cr-street2" value="${v('street2', a.street2)}" placeholder="Optional"></div>
+        <div class="field"><label for="cr-city">Shipping City *</label><input id="cr-city" value="${v('city', a.city)}"></div>
+        <div class="field"><label for="cr-county">Shipping County</label><input id="cr-county" value="${v('county', a.county)}" placeholder="Optional"></div>
+        <div class="field"><label for="cr-post">Shipping Post Code *</label><input id="cr-post" value="${v('postCode', a.postCode)}"></div>
+        <div class="field"><label for="cr-country">Shipping Country *</label><select id="cr-country"><option value="">Select…</option>${SHIPPING_COUNTRIES.map((c) => `<option ${c === (sh.country || a.country) ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+        <div class="field full"><label class="check"><input type="checkbox" id="cr-updacc" ${sh.updateAccount ? 'checked' : ''}> Update the shipping address on the Account as well</label></div>
+      </div>
+      <h3 class="send-h">Courier</h3>
+      <div class="form">
+        <div class="field full"><label class="check"><input type="checkbox" id="cr-own" ${sh.customerArranging ? 'checked' : ''}> Customer is arranging their own courier</label></div>
+        <div class="field cr-qmi"><label for="cr-carrier">Dispatch Carrier *</label><select id="cr-carrier"><option value="">Select…</option>${DISPATCH_CARRIERS.map((c) => `<option ${c === sh.carrier ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+        <div class="field cr-qmi"><label for="cr-track">Tracking Reference *</label><input id="cr-track" value="${v('tracking', '')}" placeholder="e.g. 1234567890"></div>
+        <div class="field full cr-qmi"><label for="cr-url">Tracking URL</label><input id="cr-url" type="url" value="${v('trackingUrl', '')}" placeholder="Optional – https://…"></div>
+        <div class="field full cr-own" hidden><label for="cr-freight">Courier/Freight Requirements *</label><textarea id="cr-freight" placeholder="Who is collecting, when, and anything Cambertronics need to know">${v('freightReq', '')}</textarea></div>
+        <div class="field"><label for="cr-date">Dispatch Date</label><input id="cr-date" type="date" value="${v('dispatchDate', '')}"></div>
+        <div class="field"><label for="cr-awb">Airway Bill (PDF or image) *</label><input id="cr-awb" type="file" accept=".pdf,image/*">${sh.airwayBill ? `<span class="code">Current: ${esc(sh.airwayBill)}</span>` : ''}</div>
+        <div class="field full"><label for="cr-info">Carrier Information</label><textarea id="cr-info" placeholder="Optional – collection time, account number, special handling">${v('carrierInfo', '')}</textarea></div>
+      </div>
+      <p class="code" style="margin-top:var(--space-3)">${willInvoice ? 'Saving also raises the customer invoice' + (job.terms === 'Due on Receipt' ? '' : ' (' + esc(job.terms) + ')') + '. You can check and email it straight after.' : 'The ' + esc(job.invoice.kind.toLowerCase()) + ' ' + esc(job.invoice.number) + ' already exists, so no new invoice is raised.'}</p>
+      <p class="code cr-err" id="cr-err" role="alert"></p>
+    </div>
+    <div class="m-foot"><span class="hint">Sent to the portal Package and Job</span><div><button class="btn btn-ghost" type="button" data-close>Cancel</button> <button class="btn btn-primary" type="button" id="cr-save">${willInvoice ? 'Confirm courier and raise invoice' : 'Confirm courier'}</button></div></div>`);
+  const own = $('#cr-own');
+  const toggle = () => {
+    document.querySelectorAll('.cr-qmi').forEach((el) => { el.hidden = own.checked; });
+    document.querySelectorAll('.cr-own').forEach((el) => { el.hidden = !own.checked; });
+  };
+  own.addEventListener('change', toggle); toggle();
+  document.querySelectorAll('#modal input, #modal select, #modal textarea').forEach((el) => el.addEventListener('input', () => { $('#cr-err').textContent = ''; el.classList.remove('invalid'); }));
+  $('#cr-save').addEventListener('click', async () => {
+    const g = (id) => $('#' + id).value.trim();
+    const file = $('#cr-awb').files[0];
+    const data = {
+      attention: g('cr-att'), street: g('cr-street'), street2: g('cr-street2'), city: g('cr-city'), county: g('cr-county'), postCode: g('cr-post'), country: $('#cr-country').value,
+      updateAccount: $('#cr-updacc').checked, customerArranging: own.checked, carrier: $('#cr-carrier').value, tracking: g('cr-track'), trackingUrl: g('cr-url'),
+      freightReq: g('cr-freight'), dispatchDate: $('#cr-date').value, carrierInfo: g('cr-info'), airwayBill: file ? file.name : (sh.airwayBill || ''), file,
+    };
+    // Same order and wording as fn_updateShippingAndCourier
+    const checks = [
+      ['cr-att', !data.attention, 'Shipping Attention is required.'],
+      ['cr-street', !data.street, 'Shipping Street is required.'],
+      ['cr-city', !data.city, 'Shipping City is required.'],
+      ['cr-post', !data.postCode, 'Shipping Post Code is required.'],
+      ['cr-country', !data.country, 'Shipping Country is required.'],
+      ['cr-carrier', !data.customerArranging && !data.carrier, 'Dispatch Carrier is required when QMI is arranging the courier.'],
+      ['cr-track', !data.customerArranging && !data.tracking, 'Tracking Reference is required when QMI is arranging the courier.'],
+      ['cr-freight', data.customerArranging && !data.freightReq, 'Courier/Freight Requirements are required when the customer arranges collection.'],
+      ['cr-url', data.trackingUrl && !/^https?:\/\//i.test(data.trackingUrl), 'Tracking URL must start with http:// or https://'],
+      ['cr-awb', !data.airwayBill, 'Attach the Airway Bill – Cambertronics need it on the parcel and the portal Job won\'t move on without it.'],
+    ];
+    const bad = checks.filter((c) => c[1]);
+    document.querySelectorAll('#modal .invalid').forEach((el) => el.classList.remove('invalid'));
+    if (bad.length) {
+      bad.forEach((c) => $('#' + c[0]).classList.add('invalid'));
+      $('#cr-err').textContent = bad.map((c) => c[2]).join(' ');
+      $('#' + bad[0][0]).focus();
+      return;
+    }
+    try {
+      await RepairsApi.confirmCourier(job, data);
+      console.log(LOG_PREFIX + 'Courier confirmed on ' + job.ref + ' (' + (data.customerArranging ? 'customer courier' : data.carrier) + ')');
+      closeModal(); render();
+      if (job.invoice && job.invoice.status === 'Draft') { toast('Courier sent to the portal – check and email the invoice'); openInvoice(job); }
+      else toast('Courier details sent to the portal');
+    } catch (err) { $('#cr-err').textContent = 'Could not confirm the courier: ' + err.message; }
   });
 }
 

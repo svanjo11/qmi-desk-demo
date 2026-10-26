@@ -232,6 +232,15 @@ const MockAdapter = {
     return job;
   },
 
+  // confirmCourier: save the courier details, then run the Blueprint step
+  // "Confirm Courier and Invoice Customer" (raises the invoice for credit
+  // customers and moves the portal Job to Shipping Instructions Received).
+  async confirmCourier(job, sh) {
+    job.shipping = { ...sh, sentOn: nowText() };
+    job.log.push({ when: nowText(), text: (sh.customerArranging ? 'Customer arranging own courier' : 'Courier booked: ' + sh.carrier + ' ' + sh.tracking) + ' – Airway Bill ' + sh.airwayBill + ' sent to the portal' });
+    return this.runTransition(job, 'Confirm Courier and Invoice Customer');
+  },
+
   // setVat: change the VAT treatment (user override or back to the Account default)
   // live: updates the Deal VAT fields; the next quote / draft invoice uses the matching Books tax_id
   async setVat(job, id, source, note) {
