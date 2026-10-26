@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QMI Desk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ===================== APP SHELL ===================== -->
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">R</span>
+        <div>
+          <h1>QMI Desk</h1>
+          <p class="brand-sub">Repairs and sales, every step, one screen</p>
+        </div>
+      </div>
+      <div class="proc-switch" role="tablist" aria-label="Process" id="proc"></div>
+      <nav class="filters" role="tablist" aria-label="Job filters" id="filters"></nav>
+      <div class="topbar-actions">
+        <label class="search">
+          <span class="sr-only">Search repairs</span>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
+          <input id="search" type="search" placeholder="Ref, customer, serial">
+        </label>
+        <button class="btn btn-demo" id="try-it" type="button" hidden>Try it</button>
+        <button class="btn btn-primary" id="new-repair" type="button">+ New repair</button>
+      </div>
+    </header>
+
+    <div class="demo-banner" id="demo-banner" hidden>
+      Demo with sample data – nothing is written to Zoho. Click <strong>Try it</strong> for six short tests, starting with creating a new Repairs or Sales deal. Buttons marked "Demo" play Cambertronics' part.
+    </div>
+
+    <main class="workspace">
+      <aside class="joblist" aria-label="Repair jobs">
+        <div class="joblist-head"><span id="list-count">0 jobs</span></div>
+        <ul id="jobs" class="jobs"></ul>
+      </aside>
+      <section class="detail" id="detail" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <!-- ===================== MODAL ROOT ===================== -->
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" id="modal-box"></div>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="data.js"></script>
+  <script src="sales-data.js"></script>
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
